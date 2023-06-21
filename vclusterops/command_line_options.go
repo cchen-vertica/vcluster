@@ -30,6 +30,7 @@ type VClusterDatabaseOptions struct {
 	IsEon       *bool
 
 	// part 3: auth info
+	UserName string
 	Password *string
 	Key      string
 	Cert     string
