@@ -157,7 +157,7 @@ type ClusterOp interface {
 	logPrepare()
 	logExecute()
 	logFinalize()
-	loadCerts(certs *HTTPSCerts)
+	loadCertsIfNeeded(certs *HTTPSCerts, findCertsInOptions bool)
 }
 
 /* Cluster ops basic fields and functions
@@ -228,7 +228,11 @@ func (op *OpBase) execute(execContext *OpEngineExecContext) error {
 }
 
 // if found certs in the options, we add the certs to http requests of each instruction
-func (op *OpBase) loadCerts(certs *HTTPSCerts) {
+func (op *OpBase) loadCertsIfNeeded(certs *HTTPSCerts, findCertsInOptions bool) {
+	if !findCertsInOptions {
+		return
+	}
+
 	// this step is executed after Prepare() so all http requests should be set up
 	if len(op.clusterHTTPRequest.RequestCollection) == 0 {
 		panic(fmt.Sprintf("[%s] has not set up a http request", op.name))

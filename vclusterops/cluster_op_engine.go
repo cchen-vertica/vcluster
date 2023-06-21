@@ -33,23 +33,22 @@ func MakeClusterOpEngine(instructions []ClusterOp, certs *HTTPSCerts) VClusterOp
 	return newClusterOpEngine
 }
 
+func (opEngine *VClusterOpEngine) shouldGetCertsFromOptions() bool {
+	return (opEngine.certs.key != "" && opEngine.certs.cert != "" && opEngine.certs.caCert != "")
+}
+
 func (opEngine *VClusterOpEngine) Run() error {
 	var statusCode = SUCCESS
 
 	execContext := MakeOpEngineExecContext()
 
-	findCertsInOptions := false
-	if opEngine.certs.key != "" && opEngine.certs.cert != "" && opEngine.certs.caCert != "" {
-		findCertsInOptions = true
-	}
+	findCertsInOptions := opEngine.shouldGetCertsFromOptions()
 
 	for _, op := range opEngine.instructions {
 		op.logPrepare()
 		prepareResult := op.Prepare(&execContext)
 
-		if findCertsInOptions {
-			op.loadCerts(opEngine.certs)
-		}
+		op.loadCertsIfNeeded(opEngine.certs, findCertsInOptions)
 
 		// execute an instruction if prepare succeed
 		if prepareResult.isPassing() {
