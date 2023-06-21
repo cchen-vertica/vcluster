@@ -23,11 +23,13 @@ import (
 
 type VClusterOpEngine struct {
 	instructions []ClusterOp
+	certs        *HTTPSCerts
 }
 
-func MakeClusterOpEngine(instructions []ClusterOp) VClusterOpEngine {
+func MakeClusterOpEngine(instructions []ClusterOp, certs *HTTPSCerts) VClusterOpEngine {
 	newClusterOpEngine := VClusterOpEngine{}
 	newClusterOpEngine.instructions = instructions
+	newClusterOpEngine.certs = certs
 	return newClusterOpEngine
 }
 
@@ -36,9 +38,18 @@ func (opEngine *VClusterOpEngine) Run() error {
 
 	execContext := MakeOpEngineExecContext()
 
+	findCertsInOptions := false
+	if opEngine.certs.key != "" && opEngine.certs.cert != "" && opEngine.certs.caCert != "" {
+		findCertsInOptions = true
+	}
+
 	for _, op := range opEngine.instructions {
 		op.logPrepare()
 		prepareResult := op.Prepare(&execContext)
+
+		if findCertsInOptions {
+			op.loadCerts(opEngine.certs)
+		}
 
 		// execute an instruction if prepare succeed
 		if prepareResult.isPassing() {

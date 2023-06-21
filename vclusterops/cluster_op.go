@@ -16,6 +16,8 @@
 package vclusterops
 
 import (
+	"fmt"
+
 	"github.com/vertica/vcluster/vclusterops/util"
 	"github.com/vertica/vcluster/vclusterops/vlog"
 )
@@ -155,6 +157,7 @@ type ClusterOp interface {
 	logPrepare()
 	logExecute()
 	logFinalize()
+	loadCerts(certs *HTTPSCerts)
 }
 
 /* Cluster ops basic fields and functions
@@ -222,6 +225,23 @@ func (op *OpBase) execute(execContext *OpEngineExecContext) error {
 		return err
 	}
 	return nil
+}
+
+// if found certs in the options, we add the certs to http requests of each instruction
+func (op *OpBase) loadCerts(certs *HTTPSCerts) {
+	// this step is executed after Prepare() so all http requests should be set up
+	if len(op.clusterHTTPRequest.RequestCollection) == 0 {
+		panic(fmt.Sprintf("[%s] has not set up a http request", op.name))
+	}
+
+	for host := range op.clusterHTTPRequest.RequestCollection {
+		request := op.clusterHTTPRequest.RequestCollection[host]
+		request.FindCertsInOptions = true
+		request.Certs.key = certs.key
+		request.Certs.cert = certs.cert
+		request.Certs.caCert = certs.caCert
+		op.clusterHTTPRequest.RequestCollection[host] = request
+	}
 }
 
 /* Sensitive fields in request body

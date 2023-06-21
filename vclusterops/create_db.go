@@ -16,7 +16,6 @@
 package vclusterops
 
 import (
-	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -302,8 +301,9 @@ func VCreateDatabase(options *VCreateDatabaseOptions) (VCoordinationDatabase, er
 		return vdb, err
 	}
 
-	// create a VClusterOpEngine
-	clusterOpEngine := MakeClusterOpEngine(instructions)
+	// create a VClusterOpEngine, and add certs to the engine
+	certs := HTTPSCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
+	clusterOpEngine := MakeClusterOpEngine(instructions, &certs)
 
 	// Give the instructions to the VClusterOpEngine to run
 	runError := clusterOpEngine.Run()
@@ -472,7 +472,7 @@ func getInitiator(hosts []string) (string, error) {
 	//   if localhost is a part of the --hosts;
 	// but if none of the given hosts is localhost,
 	//   we should just nominate hosts[0] as the initiator to bootstrap catalog.
-	return hosts[0], errors.New(errMsg)
+	return hosts[0], nil
 }
 
 func produceTransferConfigOps(instructions *[]ClusterOp, bootstrapHost []string, vdb *VCoordinationDatabase) {

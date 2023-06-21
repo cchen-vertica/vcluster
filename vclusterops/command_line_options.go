@@ -31,6 +31,9 @@ type VClusterDatabaseOptions struct {
 
 	// part 3: auth info
 	Password *string
+	Key      string
+	Cert     string
+	CaCert   string
 
 	// part 4: other info
 	HonorUserInput *bool

@@ -23,8 +23,16 @@ type HostHTTPRequest struct {
 	RequestData  string // the data must be a JSON-encoded string
 	Username     string // optional, for HTTPS endpoints only
 	// string pointer is used here as we need to check whether the password has been set
-	Password *string // optional, for HTTPS endpoints only
-	Timeout  int     // optional, set it if an Op needs longer time to complete
+	Password           *string    // optional, for HTTPS endpoints only
+	Timeout            int        // optional, set it if an Op needs longer time to complete
+	FindCertsInOptions bool       // optional, for calling NMA/Vertica HTTPS endpoints in K8s
+	Certs              HTTPSCerts // optional, for calling NMA/Vertica HTTPS endpoints in K8s
+}
+
+type HTTPSCerts struct {
+	key    string
+	cert   string
+	caCert string
 }
 
 func (req *HostHTTPRequest) BuildNMAEndpoint(url string) {

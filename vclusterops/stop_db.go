@@ -234,8 +234,9 @@ func VStopDatabase(options *VStopDatabaseOptions) (string, error) {
 		return "", err
 	}
 
-	// Create a VClusterOpEngine
-	clusterOpEngine := MakeClusterOpEngine(instructions)
+	// Create a VClusterOpEngine, and add certs to the engine
+	certs := HTTPSCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
+	clusterOpEngine := MakeClusterOpEngine(instructions, &certs)
 
 	// Give the instructions to the VClusterOpEngine to run
 	runError := clusterOpEngine.Run()
