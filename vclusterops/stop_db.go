@@ -225,7 +225,7 @@ func VStopDatabase(options *VStopDatabaseOptions) (string, error) {
 
 	// build stopDBInfo from config file and options
 	stopDBInfo := new(VStopDatabaseInfo)
-	stopDBInfo.UserName = options.UserName
+	stopDBInfo.UserName = *options.UserName
 	stopDBInfo.Password = options.Password
 	stopDBInfo.DrainSeconds = options.DrainSeconds
 	stopDBInfo.DBName, stopDBInfo.Hosts = GetNameAndHosts(options, config)

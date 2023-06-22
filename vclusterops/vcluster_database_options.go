@@ -38,7 +38,7 @@ type DatabaseOptions struct {
 	IsEon       *bool
 
 	// part 3: authentication info
-	UserName string
+	UserName *string
 	Password *string
 	Key      string
 	Cert     string
@@ -55,6 +55,7 @@ func (opt *DatabaseOptions) SetDefaultValues() {
 	opt.CatalogPrefix = new(string)
 	opt.DataPrefix = new(string)
 	opt.DepotPrefix = new(string)
+	opt.UserName = new(string)
 }
 
 func (opt *DatabaseOptions) CheckNilPointerParams() error {

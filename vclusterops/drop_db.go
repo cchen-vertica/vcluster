@@ -103,7 +103,7 @@ func produceDropDBInstructions(vdb *VCoordinationDatabase, options *VDropDatabas
 	// require to have the same vertica version
 	nmaVerticaVersionOp := MakeNMAVerticaVersionOp("NMAVerticaVersionOp", hosts, true)
 
-	username := options.UserName
+	username := *options.UserName
 	if username == "" {
 		var errGetUser error
 		username, errGetUser = util.GetCurrentUsername()

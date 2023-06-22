@@ -475,7 +475,7 @@ func produceBasicCreateDBInstructions(vdb *VCoordinationDatabase, options *VCrea
 	nmaVerticaVersionOp := MakeNMAVerticaVersionOp("NMAVerticaVersionOp", hosts, true)
 
 	// need username for https operations
-	username := options.UserName
+	username := *options.UserName
 	if username == "" {
 		var errGetUser error
 		username, errGetUser = util.GetCurrentUsername()
