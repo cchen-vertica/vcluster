@@ -27,8 +27,8 @@ type HostHTTPRequest struct {
 	Timeout  int     // optional, set it if an Op needs longer time to complete
 
 	// optional, for calling NMA/Vertica HTTPS endpoints. If Username/Password is set, that takes precedence over this for HTTPS calls.
-	FindCertsInOptions bool
-	Certs              HTTPSCerts
+	UseCertsInOptions bool
+	Certs             HTTPSCerts
 }
 
 type HTTPSCerts struct {

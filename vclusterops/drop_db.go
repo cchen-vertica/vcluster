@@ -16,6 +16,18 @@ type VDropDatabaseOptions struct {
 	UsePassword bool
 }
 
+func VDropDatabaseOptionsFactory() VDropDatabaseOptions {
+	opt := VDropDatabaseOptions{}
+	// set default values to the params
+	opt.SetDefaultValues()
+
+	return opt
+}
+
+func (options *VDropDatabaseOptions) SetDefaultValues() {
+	options.DatabaseOptions.SetDefaultValues()
+}
+
 func (options *VDropDatabaseOptions) AnalyzeOptions() error {
 	hostAddresses, err := util.ResolveRawHostsToAddresses(options.RawHosts, *options.Ipv6)
 	if err != nil {

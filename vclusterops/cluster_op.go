@@ -240,7 +240,7 @@ func (op *OpBase) loadCertsIfNeeded(certs *HTTPSCerts, findCertsInOptions bool) 
 
 	for host := range op.clusterHTTPRequest.RequestCollection {
 		request := op.clusterHTTPRequest.RequestCollection[host]
-		request.FindCertsInOptions = true
+		request.UseCertsInOptions = true
 		request.Certs.key = certs.key
 		request.Certs.cert = certs.cert
 		request.Certs.caCert = certs.caCert

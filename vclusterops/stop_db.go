@@ -43,8 +43,18 @@ type VStopDatabaseInfo struct {
 }
 
 func VStopDatabaseOptionsFactory() VStopDatabaseOptions {
-	newOptions := VStopDatabaseOptions{}
-	return newOptions
+	opt := VStopDatabaseOptions{}
+	// set default values to the params
+	opt.SetDefaultValues()
+
+	return opt
+}
+
+func (options *VStopDatabaseOptions) SetDefaultValues() {
+	options.DatabaseOptions.SetDefaultValues()
+
+	options.CheckUserConn = new(bool)
+	options.ForceKill = new(bool)
 }
 
 func (options *VStopDatabaseOptions) ValidateRequiredOptions() error {

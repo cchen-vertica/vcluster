@@ -191,7 +191,7 @@ func whetherUsePassword(request *HostHTTPRequest) (bool, error) {
 
 	// otherwise, use certs
 	// a. use certs in options
-	if request.FindCertsInOptions {
+	if request.UseCertsInOptions {
 		return false, nil
 	}
 
@@ -274,7 +274,7 @@ func (adapter *HTTPAdapter) setupHTTPClient(
 		var cert tls.Certificate
 		var caCertPool *x509.CertPool
 		var err error
-		if request.FindCertsInOptions {
+		if request.UseCertsInOptions {
 			cert, caCertPool, err = adapter.buildCertsFromMemory(request.Certs.key, request.Certs.cert, request.Certs.caCert)
 		} else {
 			cert, caCertPool, err = adapter.buildCertsFromFile()
