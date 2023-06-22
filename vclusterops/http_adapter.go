@@ -190,6 +190,12 @@ func whetherUsePassword(request *HostHTTPRequest) (bool, error) {
 	}
 
 	// otherwise, use certs
+	// a. use certs in options
+	if request.FindCertsInOptions {
+		return false, nil
+	}
+
+	// b. use certs in local path
 	_, err := getCertFilePaths()
 	if err != nil {
 		// in case that the cert files do not exist

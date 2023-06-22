@@ -103,9 +103,13 @@ func produceDropDBInstructions(vdb *VCoordinationDatabase, options *VDropDatabas
 	// require to have the same vertica version
 	nmaVerticaVersionOp := MakeNMAVerticaVersionOp("NMAVerticaVersionOp", hosts, true)
 
-	username, errGetUser := util.GetCurrentUsername()
-	if errGetUser != nil {
-		return instructions, errGetUser
+	username := options.UserName
+	if username == "" {
+		var errGetUser error
+		username, errGetUser = util.GetCurrentUsername()
+		if errGetUser != nil {
+			return instructions, errGetUser
+		}
 	}
 	vlog.LogInfo("Current username is %s", username)
 	// when checking the running database,

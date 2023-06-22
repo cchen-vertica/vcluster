@@ -26,7 +26,7 @@ import (
 
 type VStopDatabaseOptions struct {
 	// part 1: basic db info
-	VClusterDatabaseOptions
+	DatabaseOptions
 	// part 2: eon db info
 	DrainSeconds *int
 	// part 3: hidden info
@@ -37,6 +37,7 @@ type VStopDatabaseOptions struct {
 type VStopDatabaseInfo struct {
 	DBName       string
 	Hosts        []string
+	UserName     string
 	Password     *string
 	DrainSeconds *int
 }
@@ -224,6 +225,7 @@ func VStopDatabase(options *VStopDatabaseOptions) (string, error) {
 
 	// build stopDBInfo from config file and options
 	stopDBInfo := new(VStopDatabaseInfo)
+	stopDBInfo.UserName = options.UserName
 	stopDBInfo.Password = options.Password
 	stopDBInfo.DrainSeconds = options.DrainSeconds
 	stopDBInfo.DBName, stopDBInfo.Hosts = GetNameAndHosts(options, config)
@@ -260,12 +262,14 @@ func produceStopDBInstructions(stopDBInfo *VStopDatabaseInfo) ([]ClusterOp, erro
 
 	// when password is specified, we will use username/password to call https endpoints
 	useHTTPPassword := false
-	username := ""
+	username := stopDBInfo.UserName
 	if stopDBInfo.Password != nil {
 		var errGetUser error
-		username, errGetUser = util.GetCurrentUsername()
-		if errGetUser != nil {
-			return instructions, errGetUser
+		if username == "" {
+			username, errGetUser = util.GetCurrentUsername()
+			if errGetUser != nil {
+				return instructions, errGetUser
+			}
 		}
 		vlog.LogInfo("Current username is %s", username)
 		useHTTPPassword = true
