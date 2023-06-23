@@ -393,7 +393,10 @@ func (opt *VCreateDatabaseOptions) ValidateAnalyzeOptions() error {
 	return nil
 }
 
-func (opt *VCreateDatabaseOptions) VCreateDatabase() (VCoordinationDatabase, error) {
+type VClusterOps struct {
+}
+
+func (vops *VClusterOps) VCreateDatabase(options *VCreateDatabaseOptions) (VCoordinationDatabase, error) {
 	/*
 	 *   - Produce Instructions
 	 *   - Create a VClusterOpEngine
@@ -401,18 +404,18 @@ func (opt *VCreateDatabaseOptions) VCreateDatabase() (VCoordinationDatabase, err
 	 */
 	// Analyze to produce vdb info, for later create db use and for cache db info
 	vdb := MakeVCoordinationDatabase()
-	err := vdb.SetFromCreateDBOptions(opt)
+	err := vdb.SetFromCreateDBOptions(options)
 	if err != nil {
 		return vdb, err
 	}
 	// produce instructions
-	instructions, err := produceBasicCreateDBInstructions(&vdb, opt)
+	instructions, err := produceBasicCreateDBInstructions(&vdb, options)
 	if err != nil {
 		vlog.LogPrintError("fail to produce instructions, %w", err)
 		return vdb, err
 	}
 
-	additionalInstructions, err := produceAdditionalCreateDBInstructions(&vdb, opt)
+	additionalInstructions, err := produceAdditionalCreateDBInstructions(&vdb, options)
 	if err != nil {
 		vlog.LogPrintError("fail to produce instructions, %w", err)
 		return vdb, err
@@ -420,7 +423,7 @@ func (opt *VCreateDatabaseOptions) VCreateDatabase() (VCoordinationDatabase, err
 	instructions = append(instructions, additionalInstructions...)
 
 	// create a VClusterOpEngine, and add certs to the engine
-	certs := HTTPSCerts{key: opt.Key, cert: opt.Cert, caCert: opt.CaCert}
+	certs := HTTPSCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
 	clusterOpEngine := MakeClusterOpEngine(instructions, &certs)
 
 	// Give the instructions to the VClusterOpEngine to run
@@ -431,7 +434,7 @@ func (opt *VCreateDatabaseOptions) VCreateDatabase() (VCoordinationDatabase, err
 	}
 
 	// write cluster information to the YAML config file
-	err = writeClusterConfig(&vdb, opt.ConfigDirectory)
+	err = writeClusterConfig(&vdb, options.ConfigDirectory)
 	if err != nil {
 		vlog.LogPrintWarning("fail to write config file, details: %w", err)
 	}
