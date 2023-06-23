@@ -393,7 +393,7 @@ func (opt *VCreateDatabaseOptions) ValidateAnalyzeOptions() error {
 	return nil
 }
 
-func VCreateDatabase(options *VCreateDatabaseOptions) (VCoordinationDatabase, error) {
+func (opt *VCreateDatabaseOptions) VCreateDatabase() (VCoordinationDatabase, error) {
 	/*
 	 *   - Produce Instructions
 	 *   - Create a VClusterOpEngine
@@ -401,18 +401,18 @@ func VCreateDatabase(options *VCreateDatabaseOptions) (VCoordinationDatabase, er
 	 */
 	// Analyze to produce vdb info, for later create db use and for cache db info
 	vdb := MakeVCoordinationDatabase()
-	err := vdb.SetFromCreateDBOptions(options)
+	err := vdb.SetFromCreateDBOptions(opt)
 	if err != nil {
 		return vdb, err
 	}
 	// produce instructions
-	instructions, err := produceBasicCreateDBInstructions(&vdb, options)
+	instructions, err := produceBasicCreateDBInstructions(&vdb, opt)
 	if err != nil {
 		vlog.LogPrintError("fail to produce instructions, %w", err)
 		return vdb, err
 	}
 
-	additionalInstructions, err := produceAdditionalCreateDBInstructions(&vdb, options)
+	additionalInstructions, err := produceAdditionalCreateDBInstructions(&vdb, opt)
 	if err != nil {
 		vlog.LogPrintError("fail to produce instructions, %w", err)
 		return vdb, err
@@ -420,7 +420,7 @@ func VCreateDatabase(options *VCreateDatabaseOptions) (VCoordinationDatabase, er
 	instructions = append(instructions, additionalInstructions...)
 
 	// create a VClusterOpEngine, and add certs to the engine
-	certs := HTTPSCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
+	certs := HTTPSCerts{key: opt.Key, cert: opt.Cert, caCert: opt.CaCert}
 	clusterOpEngine := MakeClusterOpEngine(instructions, &certs)
 
 	// Give the instructions to the VClusterOpEngine to run
@@ -431,7 +431,7 @@ func VCreateDatabase(options *VCreateDatabaseOptions) (VCoordinationDatabase, er
 	}
 
 	// write cluster information to the YAML config file
-	err = writeClusterConfig(&vdb, options.ConfigDirectory)
+	err = writeClusterConfig(&vdb, opt.ConfigDirectory)
 	if err != nil {
 		vlog.LogPrintWarning("fail to write config file, details: %w", err)
 	}
