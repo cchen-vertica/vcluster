@@ -16,6 +16,8 @@
 package vclusterops
 
 import (
+	"fmt"
+
 	"github.com/vertica/vcluster/vclusterops/util"
 	"github.com/vertica/vcluster/vclusterops/vlog"
 )
@@ -155,6 +157,7 @@ type ClusterOp interface {
 	logPrepare()
 	logExecute()
 	logFinalize()
+	loadCertsIfNeeded(certs *HTTPSCerts, findCertsInOptions bool)
 }
 
 /* Cluster ops basic fields and functions
@@ -224,6 +227,27 @@ func (op *OpBase) execute(execContext *OpEngineExecContext) error {
 	return nil
 }
 
+// if found certs in the options, we add the certs to http requests of each instruction
+func (op *OpBase) loadCertsIfNeeded(certs *HTTPSCerts, findCertsInOptions bool) {
+	if !findCertsInOptions {
+		return
+	}
+
+	// this step is executed after Prepare() so all http requests should be set up
+	if len(op.clusterHTTPRequest.RequestCollection) == 0 {
+		panic(fmt.Sprintf("[%s] has not set up a http request", op.name))
+	}
+
+	for host := range op.clusterHTTPRequest.RequestCollection {
+		request := op.clusterHTTPRequest.RequestCollection[host]
+		request.UseCertsInOptions = true
+		request.Certs.key = certs.key
+		request.Certs.cert = certs.cert
+		request.Certs.caCert = certs.caCert
+		op.clusterHTTPRequest.RequestCollection[host] = request
+	}
+}
+
 /* Sensitive fields in request body
  */
 type SensitiveFields struct {
@@ -253,3 +277,8 @@ type OpHTTPBase struct {
 }
 
 // we may add some common functions for OpHTTPBase here
+
+// VClusterCommands is for vcluster-ops library user to do mocking test in their program
+// The user can mock VCreateDatabase, VStopDatabase ... in their unit tests
+type VClusterCommands struct {
+}
