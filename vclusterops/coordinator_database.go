@@ -39,7 +39,7 @@ type VCoordinationDatabase struct {
 	DataPrefix    string
 	HostNodeMap   map[string]VCoordinationNode
 	// for convenience
-	HostList []string
+	HostList []string // expected to be resolved IP addresses
 
 	// Eon params, the boolean values are for convenience
 	IsEon                   bool

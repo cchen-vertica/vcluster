@@ -23,6 +23,18 @@ import (
 	"golang.org/x/exp/slices"
 )
 
+type NullableBool int
+
+const (
+	False NullableBool = iota
+	True
+	Null
+)
+
+func (e NullableBool) ToBool() bool {
+	return e == True
+}
+
 type DatabaseOptions struct {
 	// part 1: basic database info
 	Name            *string
@@ -35,7 +47,7 @@ type DatabaseOptions struct {
 
 	// part 2: Eon database info
 	DepotPrefix *string
-	IsEon       *bool
+	IsEon       NullableBool
 
 	// part 3: authentication info
 	UserName *string
@@ -56,6 +68,8 @@ func (opt *DatabaseOptions) SetDefaultValues() {
 	opt.DataPrefix = new(string)
 	opt.DepotPrefix = new(string)
 	opt.UserName = new(string)
+	opt.HonorUserInput = new(bool)
+	opt.IsEon = Null
 }
 
 func (opt *DatabaseOptions) CheckNilPointerParams() error {
@@ -144,7 +158,7 @@ func (opt *DatabaseOptions) ValidatePaths(commandName string) error {
 	}
 
 	// depot prefix
-	if opt.IsEon != nil && *opt.IsEon {
+	if opt.IsEon == True {
 		err = util.ValidateRequiredAbsPath(opt.DepotPrefix, "depot path")
 		if err != nil {
 			return err

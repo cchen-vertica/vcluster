@@ -18,6 +18,7 @@ type CmdBase struct {
 	parser *flag.FlagSet
 
 	hostListStr *string // raw string from user input, need further processing
+	isEon       *bool   // need further processing to see if the user inputted this flag or not
 }
 
 // convert a host string into a list of hosts,
@@ -32,6 +33,17 @@ func (c *CmdBase) ParseHostList(options *vclusterops.DatabaseOptions) error {
 	options.RawHosts = inputHostList
 
 	return nil
+}
+
+func (c *CmdBase) ParseEonMode(options *vclusterops.DatabaseOptions) {
+	switch {
+	case c.isEon == nil:
+		options.IsEon = vclusterops.Null
+	case *c.isEon:
+		options.IsEon = vclusterops.True
+	default:
+		options.IsEon = vclusterops.False
+	}
 }
 
 // print usage of a command

@@ -61,7 +61,7 @@ func MakeCmdStopDB() CmdStopDB {
 		util.GetOptionalFlagMsg("Directory where "+vclusterops.ConfigFileName+" is located"))
 
 	// Eon flags
-	stopDBOptions.IsEon = newCmd.parser.Bool("eon-mode", false, util.GetEonFlagMsg("indicate if the database is an Eon db."+
+	newCmd.isEon = newCmd.parser.Bool("eon-mode", false, util.GetEonFlagMsg("indicate if the database is an Eon db."+
 		" Use it when you do not trust "+vclusterops.ConfigFileName))
 	stopDBOptions.DrainSeconds = newCmd.parser.Int("drain-seconds", util.DefaultDrainSeconds,
 		util.GetEonFlagMsg("seconds to wait for user connections to close."+
@@ -106,7 +106,7 @@ func (c *CmdStopDB) Parse(inputArgv []string) error {
 		c.stopDBOptions.Password = nil
 	}
 	if !util.IsOptionSet(c.parser, "eon-mode") {
-		c.stopDBOptions.IsEon = nil
+		c.CmdBase.isEon = nil
 	}
 	if !util.IsOptionSet(c.parser, "drain-seconds") {
 		c.stopDBOptions.DrainSeconds = nil
@@ -128,6 +128,7 @@ func (c *CmdStopDB) validateParse() error {
 		if err != nil {
 			return err
 		}
+		c.ParseEonMode(&c.stopDBOptions.DatabaseOptions)
 	}
 
 	return nil

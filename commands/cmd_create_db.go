@@ -146,10 +146,9 @@ func (c *CmdCreateDB) Parse(inputArgv []string) error {
 	}
 
 	if util.IsOptionSet(c.parser, "depot-path") {
-		c.createDBOptions.IsEon = new(bool)
-		*c.createDBOptions.IsEon = true
+		c.createDBOptions.IsEon = vclusterops.True
 	} else {
-		c.createDBOptions.IsEon = nil
+		c.createDBOptions.IsEon = vclusterops.False
 	}
 
 	return c.validateParse()

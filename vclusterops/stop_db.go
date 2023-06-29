@@ -151,16 +151,13 @@ func IsEonMode(options *VStopDatabaseOptions, config *ClusterConfig) bool {
 	// when config file is not available, we use user input
 	// at this time HonorUserInput must be true
 	if config == nil {
-		if options.IsEon == nil {
-			return false
-		}
-		return *options.IsEon
+		return options.IsEon.ToBool()
 	}
 
 	isEon := config.IsEon
 	// if HonorUserInput is set, we choose the user input
-	if options.IsEon != nil && *options.HonorUserInput {
-		isEon = *options.IsEon
+	if options.IsEon != Null && *options.HonorUserInput {
+		isEon = options.IsEon.ToBool()
 	}
 	return isEon
 }
