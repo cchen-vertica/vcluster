@@ -32,10 +32,10 @@ type HTTPSPollNodeStateOp struct {
 	notUpHosts []string
 }
 
-func MakeHTTPSPollNodeStateOp(name string, hosts []string,
+func MakeHTTPSPollNodeStateOp(opName string, hosts []string,
 	useHTTPPassword bool, userName string, httpsPassword *string) HTTPSPollNodeStateOp {
 	httpsPollNodeStateOp := HTTPSPollNodeStateOp{}
-	httpsPollNodeStateOp.name = name
+	httpsPollNodeStateOp.name = opName
 	httpsPollNodeStateOp.hosts = hosts
 	httpsPollNodeStateOp.useHTTPPassword = useHTTPPassword
 
@@ -136,7 +136,9 @@ func (op *HTTPSPollNodeStateOp) processResult(execContext *OpEngineExecContext) 
 // the following structs only hosts necessary information for this op
 type NodeInfo struct {
 	Address string `json:"address"`
-	State   string `json:"state"`
+	// vnode name, e.g., v_dbname_node0001
+	Name  string `json:"name"`
+	State string `json:"state"`
 }
 
 type NodesInfo struct {

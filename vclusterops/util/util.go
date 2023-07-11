@@ -257,37 +257,6 @@ func CheckMissingFields(object any) error {
 	return nil
 }
 
-// IsLocalHost decides whether an address or host name is local host
-func IsLocalHost(host string) (bool, error) {
-	// get local host name
-	localHostName, err := os.Hostname()
-	if err != nil {
-		return false, err
-	}
-
-	// get local host addresses
-	localHostAddresses, err := net.LookupIP(localHostName)
-	if err != nil {
-		return false, err
-	}
-
-	// check whether the input address matches any local addresses
-	for _, localAddr := range localHostAddresses {
-		inputAddresses, err := net.LookupIP(host)
-		if err != nil {
-			return false, err
-		}
-
-		for _, inputAddr := range inputAddresses {
-			if inputAddr.Equal(localAddr) {
-				return true, nil
-			}
-		}
-	}
-
-	return false, nil
-}
-
 // when password is given, the user name cannot be empty
 func ValidateUsernameAndPassword(useHTTPPassword bool, userName string) {
 	if useHTTPPassword && userName == "" {
@@ -357,12 +326,13 @@ func IsOptionSet(f *flag.FlagSet, optionName string) bool {
 	return found
 }
 
-// when db name is provided, make sure no special chars are in it
-func ValidateDBName(dbName string) error {
+// ValidateName will validate the name of an obj, the obj can be database, subcluster, etc.
+// when a name is provided, make sure no special chars are in it
+func ValidateName(name, obj string) error {
 	escapeChars := `=<>'^\".@*?#&/-:;{}()[] \~!%+|,` + "`$"
-	for _, c := range dbName {
+	for _, c := range name {
 		if strings.Contains(escapeChars, string(c)) {
-			return fmt.Errorf("invalid character in database name: %c", c)
+			return fmt.Errorf("invalid character in %s name: %c", obj, c)
 		}
 	}
 	return nil

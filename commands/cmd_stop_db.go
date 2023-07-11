@@ -34,9 +34,8 @@ import (
  */
 
 type CmdStopDB struct {
-	stopDBOptions *vclusterops.VStopDatabaseOptions
-
 	CmdBase
+	stopDBOptions *vclusterops.VStopDatabaseOptions
 }
 
 func MakeCmdStopDB() CmdStopDB {
@@ -47,21 +46,22 @@ func MakeCmdStopDB() CmdStopDB {
 	newCmd.parser = flag.NewFlagSet("stop_db", flag.ExitOnError)
 	stopDBOptions := vclusterops.VStopDatabaseOptionsFactory()
 
+	// required flags
+	stopDBOptions.Name = newCmd.parser.String("name", "", "The name of the database to be stopped")
+
 	// optional flags
-	stopDBOptions.Name = newCmd.parser.String("name", "", util.GetOptionalFlagMsg("The name of the database to be stopped."+
-		" Use it when you do not trust "+vclusterops.ConfigFileName))
 	stopDBOptions.Password = newCmd.parser.String("password", "", util.GetOptionalFlagMsg("Database password in single quotes"))
-	newCmd.hostListStr = newCmd.parser.String("hosts", "", util.GetOptionalFlagMsg("Comma-separated list of hosts to participate in database."+
+	newCmd.hostListStr = newCmd.parser.String("hosts", "", util.GetOptionalFlagMsg("Comma-separated list of hosts in database."+
 		" Use it when you do not trust "+vclusterops.ConfigFileName))
 	// new flags comparing to adminTools stop_db
-	stopDBOptions.Ipv6 = newCmd.parser.Bool("ipv6", false, util.GetOptionalFlagMsg("Stop database with IPv6 hosts"))
+	newCmd.ipv6 = newCmd.parser.Bool("ipv6", false, util.GetOptionalFlagMsg("Stop database with IPv6 hosts"))
 	stopDBOptions.HonorUserInput = newCmd.parser.Bool("honor-user-input", false,
 		util.GetOptionalFlagMsg("Forcefully use the user's input instead of reading the options from "+vclusterops.ConfigFileName))
 	stopDBOptions.ConfigDirectory = newCmd.parser.String("config-directory", "",
 		util.GetOptionalFlagMsg("Directory where "+vclusterops.ConfigFileName+" is located"))
 
 	// Eon flags
-	stopDBOptions.IsEon = newCmd.parser.Bool("eon-mode", false, util.GetEonFlagMsg("indicate if the database is an Eon db."+
+	newCmd.isEon = newCmd.parser.Bool("eon-mode", false, util.GetEonFlagMsg("indicate if the database is an Eon db."+
 		" Use it when you do not trust "+vclusterops.ConfigFileName))
 	stopDBOptions.DrainSeconds = newCmd.parser.Int("drain-seconds", util.DefaultDrainSeconds,
 		util.GetEonFlagMsg("seconds to wait for user connections to close."+
@@ -106,7 +106,10 @@ func (c *CmdStopDB) Parse(inputArgv []string) error {
 		c.stopDBOptions.Password = nil
 	}
 	if !util.IsOptionSet(c.parser, "eon-mode") {
-		c.stopDBOptions.IsEon = nil
+		c.CmdBase.isEon = nil
+	}
+	if !util.IsOptionSet(c.parser, "ipv6") {
+		c.CmdBase.ipv6 = nil
 	}
 	if !util.IsOptionSet(c.parser, "drain-seconds") {
 		c.stopDBOptions.DrainSeconds = nil
@@ -122,12 +125,9 @@ func (c *CmdStopDB) Parse(inputArgv []string) error {
 func (c *CmdStopDB) validateParse() error {
 	vlog.LogInfoln("Called validateParse()")
 
-	// parse raw host str input into a []string of stopDBOptions
-	if *c.stopDBOptions.HonorUserInput {
-		err := c.ParseHostList(&c.stopDBOptions.DatabaseOptions)
-		if err != nil {
-			return err
-		}
+	err := c.ValidateParseBaseOptions(&c.stopDBOptions.DatabaseOptions)
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -140,10 +140,11 @@ func (c *CmdStopDB) Analyze() error {
 
 func (c *CmdStopDB) Run() error {
 	vlog.LogInfoln("Called method Run()")
-	dbName, stopError := vclusterops.VStopDatabase(c.stopDBOptions)
+	vcc := vclusterops.VClusterCommands{}
+	stopError := vcc.VStopDatabase(c.stopDBOptions)
 	if stopError != nil {
 		return stopError
 	}
-	vlog.LogPrintInfo("Stopped a database with name [%s]", dbName)
+	vlog.LogPrintInfo("Stopped a database with name %s", *c.stopDBOptions.Name)
 	return nil
 }

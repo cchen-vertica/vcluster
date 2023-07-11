@@ -62,8 +62,7 @@ type VCreateDatabaseOptions struct {
 	ConfigDirectory    *string
 
 	// hidden options (which cache information only)
-	cachedUsername string
-	bootstrapHost  []string
+	bootstrapHost []string
 }
 
 func VCreateDatabaseOptionsFactory() VCreateDatabaseOptions {
@@ -197,7 +196,7 @@ func (opt *VCreateDatabaseOptions) CheckExtraNilPointerParams() error {
 	return nil
 }
 
-func (opt *VCreateDatabaseOptions) ValidateRequiredOptions() error {
+func (opt *VCreateDatabaseOptions) validateRequiredOptions() error {
 	// validate required parameters with default values
 	if opt.Password == nil {
 		opt.Password = new(string)
@@ -292,7 +291,7 @@ func validateDepotSize(size string) (bool, error) {
 	return true, nil
 }
 
-func (opt *VCreateDatabaseOptions) ValidateEonOptions() error {
+func (opt *VCreateDatabaseOptions) validateEonOptions() error {
 	if *opt.CommunalStorageLocation != "" {
 		if *opt.DepotPrefix == "" {
 			return fmt.Errorf("must specify a depot path with commual storage location")
@@ -319,7 +318,7 @@ func (opt *VCreateDatabaseOptions) ValidateEonOptions() error {
 	return nil
 }
 
-func (opt *VCreateDatabaseOptions) ValidateExtraOptions() error {
+func (opt *VCreateDatabaseOptions) validateExtraOptions() error {
 	if *opt.Broadcast && *opt.P2p {
 		return fmt.Errorf("cannot use both Broadcast and Point-to-point networking mode")
 	}
@@ -330,7 +329,7 @@ func (opt *VCreateDatabaseOptions) ValidateExtraOptions() error {
 	return nil
 }
 
-func (opt *VCreateDatabaseOptions) ValidateParseOptions() error {
+func (opt *VCreateDatabaseOptions) validateParseOptions() error {
 	// check nil pointers in the required options
 	err := opt.CheckNilPointerParams()
 	if err != nil {
@@ -344,17 +343,17 @@ func (opt *VCreateDatabaseOptions) ValidateParseOptions() error {
 	}
 
 	// batch 1: validate required parameters without default values
-	err = opt.ValidateRequiredOptions()
+	err = opt.validateRequiredOptions()
 	if err != nil {
 		return err
 	}
 	// batch 2: validate eon params
-	err = opt.ValidateEonOptions()
+	err = opt.validateEonOptions()
 	if err != nil {
 		return err
 	}
 	// batch 3: validate all other params
-	err = opt.ValidateExtraOptions()
+	err = opt.validateExtraOptions()
 	if err != nil {
 		return err
 	}
@@ -362,9 +361,9 @@ func (opt *VCreateDatabaseOptions) ValidateParseOptions() error {
 }
 
 // Do advanced analysis on the options inputs, like resolve hostnames to be IPs
-func (opt *VCreateDatabaseOptions) AnalyzeOptions() error {
+func (opt *VCreateDatabaseOptions) analyzeOptions() error {
 	// resolve RawHosts to be IP addresses
-	hostAddresses, err := util.ResolveRawHostsToAddresses(opt.RawHosts, *opt.Ipv6)
+	hostAddresses, err := util.ResolveRawHostsToAddresses(opt.RawHosts, opt.Ipv6.ToBool())
 	if err != nil {
 		return err
 	}
@@ -384,19 +383,16 @@ func (opt *VCreateDatabaseOptions) AnalyzeOptions() error {
 }
 
 func (opt *VCreateDatabaseOptions) ValidateAnalyzeOptions() error {
-	if err := opt.ValidateParseOptions(); err != nil {
+	if err := opt.validateParseOptions(); err != nil {
 		return err
 	}
-	if err := opt.AnalyzeOptions(); err != nil {
+	if err := opt.analyzeOptions(); err != nil {
 		return err
 	}
 	return nil
 }
 
-type VClusterOps struct {
-}
-
-func (vops *VClusterOps) VCreateDatabase(options *VCreateDatabaseOptions) (VCoordinationDatabase, error) {
+func (vcc *VClusterCommands) VCreateDatabase(options *VCreateDatabaseOptions) (VCoordinationDatabase, error) {
 	/*
 	 *   - Produce Instructions
 	 *   - Create a VClusterOpEngine
@@ -467,10 +463,7 @@ func produceBasicCreateDBInstructions(vdb *VCoordinationDatabase, options *VCrea
 	var instructions []ClusterOp
 
 	hosts := vdb.HostList
-	initiator, err := getInitiator(hosts)
-	if err != nil {
-		return instructions, err
-	}
+	initiator := getInitiator(hosts)
 
 	nmaHealthOp := MakeNMAHealthOp("NMAHealthOp", hosts)
 
@@ -478,19 +471,13 @@ func produceBasicCreateDBInstructions(vdb *VCoordinationDatabase, options *VCrea
 	nmaVerticaVersionOp := MakeNMAVerticaVersionOp("NMAVerticaVersionOp", hosts, true)
 
 	// need username for https operations
-	username := *options.UserName
-	if username == "" {
-		var errGetUser error
-		username, errGetUser = util.GetCurrentUsername()
-		if errGetUser != nil {
-			return instructions, errGetUser
-		}
+	err := options.ValidateUserName()
+	if err != nil {
+		return instructions, err
 	}
-	options.cachedUsername = username
-	vlog.LogInfo("Current username is %s", username)
 
 	checkDBRunningOp := MakeHTTPCheckRunningDBOp("HTTPCheckDBRunningOp", hosts,
-		true /* use password auth */, username, options.Password, CreateDB)
+		true /* use password auth */, *options.UserName, options.Password, CreateDB)
 
 	nmaPrepareDirectoriesOp, err := MakeNMAPrepareDirectoriesOp("NMAPrepareDirectoriesOp", vdb.HostNodeMap)
 	if err != nil {
@@ -515,7 +502,7 @@ func produceBasicCreateDBInstructions(vdb *VCoordinationDatabase, options *VCrea
 
 	nmaStartNodeOp := MakeNMAStartNodeOp("NMAStartNodeOp", bootstrapHost)
 
-	httpsPollBootstrapNodeStateOp := MakeHTTPSPollNodeStateOp("HTTPSPollNodeStateOp", bootstrapHost, true, username, options.Password)
+	httpsPollBootstrapNodeStateOp := MakeHTTPSPollNodeStateOp("HTTPSPollNodeStateOp", bootstrapHost, true, *options.UserName, options.Password)
 
 	instructions = append(instructions,
 		&nmaHealthOp,
@@ -531,11 +518,11 @@ func produceBasicCreateDBInstructions(vdb *VCoordinationDatabase, options *VCrea
 
 	if len(hosts) > 1 {
 		httpCreateNodeOp := MakeHTTPCreateNodeOp("HTTPCreateNodeOp", bootstrapHost,
-			true /* use password auth */, username, options.Password, vdb)
+			true /* use password auth */, *options.UserName, options.Password, vdb)
 		instructions = append(instructions, &httpCreateNodeOp)
 	}
 
-	httpsReloadSpreadOp := MakeHTTPSReloadSpreadOp("HTTPSReloadSpreadOp", bootstrapHost, true, username, options.Password)
+	httpsReloadSpreadOp := MakeHTTPSReloadSpreadOp("HTTPSReloadSpreadOp", bootstrapHost, true, *options.UserName, options.Password)
 	instructions = append(instructions, &httpsReloadSpreadOp)
 
 	if len(hosts) > 1 {
@@ -556,7 +543,7 @@ func produceAdditionalCreateDBInstructions(vdb *VCoordinationDatabase, options *
 
 	hosts := vdb.HostList
 	bootstrapHost := options.bootstrapHost
-	username := options.cachedUsername
+	username := *options.UserName
 
 	if !*options.SkipStartupPolling {
 		httpsPollNodeStateOp := MakeHTTPSPollNodeStateOp("HTTPSPollNodeStateOp", hosts, true, username, options.Password)
@@ -586,28 +573,9 @@ func produceAdditionalCreateDBInstructions(vdb *VCoordinationDatabase, options *
 	return instructions, nil
 }
 
-func getInitiator(hosts []string) (string, error) {
-	errMsg := "fail to find initiator node from the host list"
-
-	for _, host := range hosts {
-		isLocalHost, err := util.IsLocalHost(host)
-		if err != nil {
-			return "", fmt.Errorf("%s, %w", errMsg, err)
-		}
-
-		if isLocalHost {
-			return host, nil
-		}
-	}
-
-	// If none of the hosts is localhost, we assign the first host as initiator.
-	// Our assumptions is that vcluster and vclusterops are not always running on a host,
-	// that is a part of vertica cluster.
-	// Therefore, we can of course prioritize localhost,
-	//   if localhost is a part of the --hosts;
-	// but if none of the given hosts is localhost,
-	//   we should just nominate hosts[0] as the initiator to bootstrap catalog.
-	return hosts[0], nil
+func getInitiator(hosts []string) string {
+	// simply use the first one in user input
+	return hosts[0]
 }
 
 func produceTransferConfigOps(instructions *[]ClusterOp, bootstrapHost []string, vdb *VCoordinationDatabase) {

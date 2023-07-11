@@ -13,19 +13,36 @@
  limitations under the License.
 */
 
-package vclusterops
+package vstruct
 
-type OpEngineExecContext struct {
-	dispatcher      HTTPRequestDispatcher
-	networkProfiles map[string]NetworkProfile
-	nmaVDatabase    NmaVDatabase
-	upHosts         []string // a sorted host list that contains all up nodes
-	nodeStates      []NodeInfo
+type NullableBool int
+
+const (
+	False NullableBool = iota
+	True
+	NotSet
+)
+
+func (e NullableBool) ToBool() bool {
+	return e == True
 }
 
-func MakeOpEngineExecContext() OpEngineExecContext {
-	newOpEngineExecContext := OpEngineExecContext{}
-	newOpEngineExecContext.dispatcher = MakeHTTPRequestDispatcher()
+func (e *NullableBool) FromBoolPointer(val *bool) {
+	switch {
+	case val == nil:
+		*e = NotSet
+	case *val:
+		*e = True
+	default:
+		*e = False
+	}
+}
 
-	return newOpEngineExecContext
+func MakeNullableBool(val bool) (e NullableBool) {
+	if val {
+		e = True
+	} else {
+		e = False
+	}
+	return e
 }

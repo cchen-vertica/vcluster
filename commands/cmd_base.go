@@ -18,6 +18,8 @@ type CmdBase struct {
 	parser *flag.FlagSet
 
 	hostListStr *string // raw string from user input, need further processing
+	isEon       *bool   // need further processing to see if the user inputted this flag or not
+	ipv6        *bool   // need further processing to see if the user inputted this flag or not
 }
 
 // convert a host string into a list of hosts,
@@ -59,4 +61,21 @@ func (c *CmdBase) ValidateParseArgv(commandType string) error {
 	}
 
 	return c.ParseArgv()
+}
+
+// ValidateParseBaseOptions will validate and parse the required base options in each command
+func (c *CmdBase) ValidateParseBaseOptions(opt *vclusterops.DatabaseOptions) error {
+	if *opt.HonorUserInput {
+		// parse raw host str input into a []string
+		err := c.ParseHostList(opt)
+		if err != nil {
+			return err
+		}
+		// parse IsEon
+		opt.IsEon.FromBoolPointer(c.isEon)
+		// parse Ipv6
+		opt.Ipv6.FromBoolPointer(c.ipv6)
+	}
+
+	return nil
 }
