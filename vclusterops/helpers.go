@@ -19,15 +19,19 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"strings"
 
 	"github.com/vertica/vcluster/vclusterops/util"
 	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 const (
-	ksafetyThreshold = 3
-	ksafeValueZero   = 0
-	ksafeValueOne    = 1
+	ksafetyThreshold        = 3
+	ksafeValueZero          = 0
+	ksafeValueOne           = 1
+	awsAuthKey              = "awsauth"
+	numOfAWSAuthComponents  = 2
+	nmaSuccessfulReturnCode = 0
 )
 
 // produceTransferConfigOps generates instructions to transfert some config
@@ -180,4 +184,30 @@ func getVDBFromRunningDB(vdb *VCoordinationDatabase, options *DatabaseOptions) e
 // appendHTTPSFailureError is internally used by https operations for appending an error message to the existing error
 func appendHTTPSFailureError(allErrs error) error {
 	return errors.Join(allErrs, fmt.Errorf("could not find a host with a passing result"))
+}
+
+// getInitiator will pick an initiator from a host list to execute https calls
+func getInitiator(hosts []string) string {
+	// simply use the first one in user input
+	return hosts[0]
+}
+
+// extractAWSAuthFromParameterMap will find AWS auth from communal storage params, split it into keyID and keySecret,
+// and remove it from communal storage params
+func extractAWSAuthFromParameters(communalStorageParameters map[string]string) (keyID, keySecret string, found bool, err error) {
+	if auth, exist := communalStorageParameters[awsAuthKey]; exist {
+		found = true
+
+		// awsauth format will be keyID:keySecret
+		auths := strings.Split(auth, ":")
+		if len(auths) == numOfAWSAuthComponents {
+			keyID = strings.TrimSpace(auths[0])
+			keySecret = strings.TrimSpace(auths[1])
+		} else {
+			return keyID, keySecret, found, fmt.Errorf("invalid AWS Auth value found in communal storage params")
+		}
+		delete(communalStorageParameters, awsAuthKey)
+	}
+
+	return keyID, keySecret, found, nil
 }

@@ -276,7 +276,8 @@ func produceAddNodeInstructions(vdb *VCoordinationDatabase,
 		}
 		instructions = append(instructions, &httpsFindSubclusterOrDefaultOp)
 	}
-	nmaPrepareDirectoriesOp, err := makeNMAPrepareDirectoriesOp(options.NewHostNodeMap)
+	nmaPrepareDirectoriesOp, err := makeNMAPrepareDirectoriesOp(options.NewHostNodeMap,
+		false /*force cleanup*/, false /*for db revive*/)
 	if err != nil {
 		return instructions, err
 	}

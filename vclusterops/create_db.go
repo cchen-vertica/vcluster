@@ -138,7 +138,7 @@ func (opt *VCreateDatabaseOptions) CheckNilPointerParams() error {
 		return util.ParamNotSetErrorMsg("communal-storage-location")
 	}
 	if opt.CommunalStorageParamsPath == nil {
-		return util.ParamNotSetErrorMsg("communal_storage-params")
+		return util.ParamNotSetErrorMsg("communal-storage-params")
 	}
 	if opt.DepotSize == nil {
 		return util.ParamNotSetErrorMsg("depot-size")
@@ -479,7 +479,8 @@ func produceBasicCreateDBInstructions(vdb *VCoordinationDatabase, options *VCrea
 		return instructions, err
 	}
 
-	nmaPrepareDirectoriesOp, err := makeNMAPrepareDirectoriesOp(vdb.HostNodeMap)
+	nmaPrepareDirectoriesOp, err := makeNMAPrepareDirectoriesOp(vdb.HostNodeMap,
+		false /*force cleanup*/, false /*for db revive*/)
 	if err != nil {
 		return instructions, err
 	}
@@ -604,9 +605,4 @@ func produceAdditionalCreateDBInstructions(vdb *VCoordinationDatabase, options *
 		instructions = append(instructions, &httpsSyncCatalogOp)
 	}
 	return instructions, nil
-}
-
-func getInitiator(hosts []string) string {
-	// simply use the first one in user input
-	return hosts[0]
 }

@@ -265,6 +265,21 @@ func (op *OpBase) isSkipExecute() bool {
 	return op.skipExecute
 }
 
+// hasQuorum checks if we have enough working primary nodes to maintain data integrity
+// quorumCount = (1/2 * number of primary nodes) + 1
+func (op *OpBase) hasQuorum(hostCount, primaryNodeCount uint) bool {
+	quorumCount := primaryNodeCount/2 + 1
+	if hostCount < quorumCount {
+		vlog.LogPrintError("[%s] Quorum check failed: "+
+			"number of hosts with latest catalog (%d) is not "+
+			"greater than or equal to 1/2 of number of the primary nodes (%d)\n",
+			op.name, len(op.hosts), primaryNodeCount)
+		return false
+	}
+
+	return true
+}
+
 /* Sensitive fields in request body
  */
 type SensitiveFields struct {
