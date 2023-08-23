@@ -19,16 +19,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 const (
-	successfulResult = "Download successful"
+	respSuccResult   = "Download successful"
 	userStorageType  = 4
 	depotStorageType = 5
-	catalogSuffix    = "/Catalog"
+	catalogSuffix    = "Catalog"
 )
 
 type NMADownloadFileOp struct {
@@ -66,8 +67,8 @@ func makeNMADownloadFileOp(hosts, newNodes []string, sourceFilePath, destination
 		requestData.CatalogPath = catalogPath
 		// if aws auth is specified in communal storage params, we extract it.
 		// create aws_access_key_id and aws_secret_access_key using aws auth for calling NMA /vertica/download-file.
-		// we might need to do this for GCP and Azure too in the future
-		awsKeyID, awsKeySecret, found, err := extractAWSAuthFromParameters(communalStorageParameters)
+		// the aws auth needs extra process in NMA compared to other cloud providers' auths.
+		found, awsKeyID, awsKeySecret, err := extractAWSAuthFromParameters(communalStorageParameters)
 		if err != nil {
 			return op, fmt.Errorf("[%s] %w", op.name, err)
 		}
@@ -155,8 +156,9 @@ func (op *NMADownloadFileOp) processResult(_ *OpEngineExecContext) error {
 				break
 			}
 
-			if strings.TrimSpace(response.Result) != successfulResult {
-				err = fmt.Errorf(`[%s] fail to download file on host %s`, op.name, host)
+			result := strings.TrimSpace(response.Result)
+			if result != respSuccResult {
+				err = fmt.Errorf(`[%s] fail to download file on host %s, error result in the response is %s`, op.name, host, result)
 				vlog.LogError(err.Error())
 				allErrs = errors.Join(allErrs, err)
 				break
@@ -190,12 +192,11 @@ func (op *NMADownloadFileOp) processResult(_ *OpEngineExecContext) error {
 
 				// remove suffix "/Catalog" from node catalog path
 				// e.g. /data/test_db/v_test_db_node0002_catalog/Catalog -> /data/test_db/v_test_db_node0002_catalog
-				catalogPath := node.CatalogPath
-				lastIndex := strings.LastIndex(node.CatalogPath, catalogSuffix)
-				if lastIndex != -1 {
-					catalogPath = node.CatalogPath[:lastIndex]
+				if filepath.Base(node.CatalogPath) == catalogSuffix {
+					vNode.CatalogPath = filepath.Dir(node.CatalogPath)
+				} else {
+					vNode.CatalogPath = node.CatalogPath
 				}
-				vNode.CatalogPath = catalogPath
 
 				for _, storage := range descFileContent.StorageLocations {
 					// when storage name contains the node name, we know this storage is for that node

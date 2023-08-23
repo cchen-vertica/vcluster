@@ -16,7 +16,7 @@ import (
  */
 type CmdReviveDB struct {
 	CmdBase
-	reviveDBOptions       *vclusterops.VReviveDBOptions
+	reviveDBOptions       *vclusterops.VReviveDatabaseOptions
 	communalStorageParams *string // raw input from user, need further processing
 }
 
@@ -101,7 +101,7 @@ func (c *CmdReviveDB) Run(log logr.Logger) error {
 		Log: log.WithName(c.CommandType()),
 	}
 	vcc.Log.V(1).Info("Called method Run()")
-	err := vcc.VReviveDB(c.reviveDBOptions)
+	err := vcc.VReviveDatabase(c.reviveDBOptions)
 	if err != nil {
 		vcc.Log.Error(err, "fail to revive database %s", *c.reviveDBOptions.Name)
 		return err

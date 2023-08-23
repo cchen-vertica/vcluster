@@ -23,13 +23,9 @@ import (
 	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-const successfulCode = 0
-
-type NMALoadRemoteCatalogOp struct {
+type nmaLoadRemoteCatalogOp struct {
 	OpBase
 	hostRequestBodyMap        map[string]string
-	dbName                    string
-	communalLocation          string
 	communalStorageParameters map[string]string
 	oldHosts                  []string
 	vdb                       *VCoordinationDatabase
@@ -50,14 +46,12 @@ type loadRemoteCatalogRequestData struct {
 	Parameters         map[string]string   `json:"parameters,omitempty"`
 }
 
-func makeNMALoadRemoteCatalogOp(newHosts, oldHosts []string, dbName, communalLocation string, communalStorageParameters map[string]string,
-	vdb *VCoordinationDatabase, timeout uint) NMALoadRemoteCatalogOp {
-	op := NMALoadRemoteCatalogOp{}
+func makeNMALoadRemoteCatalogOp(oldHosts []string, communalStorageParameters map[string]string,
+	vdb *VCoordinationDatabase, timeout uint) nmaLoadRemoteCatalogOp {
+	op := nmaLoadRemoteCatalogOp{}
 	op.name = "NMALoadRemoteCatalogOp"
-	op.hosts = newHosts
+	op.hosts = vdb.HostList
 	op.oldHosts = oldHosts
-	op.dbName = dbName
-	op.communalLocation = communalLocation
 	op.communalStorageParameters = communalStorageParameters
 	op.vdb = vdb
 	op.timeout = timeout
@@ -73,7 +67,7 @@ func makeNMALoadRemoteCatalogOp(newHosts, oldHosts []string, dbName, communalLoc
 }
 
 // make https json data
-func (op *NMALoadRemoteCatalogOp) setupRequestBody(execContext *OpEngineExecContext) error {
+func (op *nmaLoadRemoteCatalogOp) setupRequestBody(execContext *OpEngineExecContext) error {
 	if len(execContext.networkProfiles) != len(op.hosts) {
 		return fmt.Errorf("[%s] the number of hosts in networkProfiles does not match"+
 			" the number of hosts that will load remote catalogs", op.name)
@@ -84,15 +78,18 @@ func (op *NMALoadRemoteCatalogOp) setupRequestBody(execContext *OpEngineExecCont
 	for host, profile := range execContext.networkProfiles {
 		var addresses []string
 		addresses = append(addresses, host, profile.Address, profile.Broadcast)
-		nodeName := op.vdb.HostNodeMap[host].Name
-		nodeAddresses[nodeName] = addresses
+		if node, found := op.vdb.HostNodeMap[host]; found {
+			nodeAddresses[node.Name] = addresses
+		} else {
+			return fmt.Errorf("[%s] fail to find host %s in host node map", op.name, host)
+		}
 	}
 
 	op.hostRequestBodyMap = make(map[string]string)
 	for index, host := range op.hosts {
 		requestData := loadRemoteCatalogRequestData{}
-		requestData.DBName = op.dbName
-		requestData.CommunalLocation = op.communalLocation
+		requestData.DBName = op.vdb.Name
+		requestData.CommunalLocation = op.vdb.CommunalStorageLocation
 		requestData.Host = op.oldHosts[index]
 		vNode := op.vdb.HostNodeMap[host]
 		requestData.NodeName = vNode.Name
@@ -100,8 +97,8 @@ func (op *NMALoadRemoteCatalogOp) setupRequestBody(execContext *OpEngineExecCont
 		requestData.StorageLocations = vNode.StorageLocations
 		// if aws auth is specified in communal storage params, we extract it.
 		// create aws_access_key_id and aws_secret_access_key using aws auth for calling NMA /catalog/revive.
-		// we might need to do this for GCP and Azure too in the future
-		awsKeyID, awsKeySecret, found, err := extractAWSAuthFromParameters(op.communalStorageParameters)
+		// the aws auth needs extra process in NMA compared to other cloud providers' auths.
+		found, awsKeyID, awsKeySecret, err := extractAWSAuthFromParameters(op.communalStorageParameters)
 		if err != nil {
 			return fmt.Errorf("[%s] %w", op.name, err)
 		}
@@ -123,7 +120,7 @@ func (op *NMALoadRemoteCatalogOp) setupRequestBody(execContext *OpEngineExecCont
 	return nil
 }
 
-func (op *NMALoadRemoteCatalogOp) setupClusterHTTPRequest(hosts []string) error {
+func (op *nmaLoadRemoteCatalogOp) setupClusterHTTPRequest(hosts []string) error {
 	op.clusterHTTPRequest = ClusterHTTPRequest{}
 	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
 	op.setVersionToSemVar()
@@ -141,7 +138,7 @@ func (op *NMALoadRemoteCatalogOp) setupClusterHTTPRequest(hosts []string) error 
 	return nil
 }
 
-func (op *NMALoadRemoteCatalogOp) prepare(execContext *OpEngineExecContext) error {
+func (op *nmaLoadRemoteCatalogOp) prepare(execContext *OpEngineExecContext) error {
 	err := op.setupRequestBody(execContext)
 	if err != nil {
 		return err
@@ -151,7 +148,7 @@ func (op *NMALoadRemoteCatalogOp) prepare(execContext *OpEngineExecContext) erro
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *NMALoadRemoteCatalogOp) execute(execContext *OpEngineExecContext) error {
+func (op *nmaLoadRemoteCatalogOp) execute(execContext *OpEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -159,15 +156,11 @@ func (op *NMALoadRemoteCatalogOp) execute(execContext *OpEngineExecContext) erro
 	return op.processResult(execContext)
 }
 
-func (op *NMALoadRemoteCatalogOp) finalize(_ *OpEngineExecContext) error {
+func (op *nmaLoadRemoteCatalogOp) finalize(_ *OpEngineExecContext) error {
 	return nil
 }
 
-type loadCatalogResponse struct {
-	StatusCode int `json:"status"`
-}
-
-func (op *NMALoadRemoteCatalogOp) processResult(_ *OpEngineExecContext) error {
+func (op *nmaLoadRemoteCatalogOp) processResult(_ *OpEngineExecContext) error {
 	var allErrs error
 	var successPrimaryNodeCount uint
 
@@ -175,16 +168,15 @@ func (op *NMALoadRemoteCatalogOp) processResult(_ *OpEngineExecContext) error {
 		op.logResponse(host, result)
 
 		if result.isPassing() {
-			response := loadCatalogResponse{}
+			response := httpsResponseStatus{}
 			err := op.parseAndCheckResponse(host, result.content, &response)
 			if err != nil {
 				allErrs = errors.Join(allErrs, err)
 				continue
 			}
 
-			if response.StatusCode != successfulCode {
-				err = fmt.Errorf(`[%s] fail to load remote catalog on host %s`, op.name, host)
-				vlog.LogError(err.Error())
+			err = op.checkResponseStatusCode(response, host)
+			if err != nil {
 				allErrs = errors.Join(allErrs, err)
 				continue
 			}
@@ -204,7 +196,7 @@ func (op *NMALoadRemoteCatalogOp) processResult(_ *OpEngineExecContext) error {
 		err := fmt.Errorf("[%s] fail to load catalog on enough primary nodes. Success count: %d", op.name, successPrimaryNodeCount)
 		vlog.LogError(err.Error())
 		allErrs = errors.Join(allErrs, err)
-		return appendHTTPSFailureError(allErrs)
+		return allErrs
 	}
 
 	return nil

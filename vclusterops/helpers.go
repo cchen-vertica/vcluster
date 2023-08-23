@@ -29,7 +29,6 @@ const (
 	ksafetyThreshold        = 3
 	ksafeValueZero          = 0
 	ksafeValueOne           = 1
-	awsAuthKey              = "awsauth"
 	numOfAWSAuthComponents  = 2
 	nmaSuccessfulReturnCode = 0
 )
@@ -194,8 +193,8 @@ func getInitiator(hosts []string) string {
 
 // extractAWSAuthFromParameterMap will find AWS auth from communal storage params, split it into keyID and keySecret,
 // and remove it from communal storage params
-func extractAWSAuthFromParameters(communalStorageParameters map[string]string) (keyID, keySecret string, found bool, err error) {
-	if auth, exist := communalStorageParameters[awsAuthKey]; exist {
+func extractAWSAuthFromParameters(communalStorageParameters map[string]string) (found bool, keyID, keySecret string, err error) {
+	if auth, exist := communalStorageParameters[util.AWSAuthKey]; exist {
 		found = true
 
 		// awsauth format will be keyID:keySecret
@@ -204,10 +203,10 @@ func extractAWSAuthFromParameters(communalStorageParameters map[string]string) (
 			keyID = strings.TrimSpace(auths[0])
 			keySecret = strings.TrimSpace(auths[1])
 		} else {
-			return keyID, keySecret, found, fmt.Errorf("invalid AWS Auth value found in communal storage params")
+			return found, keyID, keySecret, fmt.Errorf("invalid AWS Auth value found in communal storage params")
 		}
-		delete(communalStorageParameters, awsAuthKey)
+		delete(communalStorageParameters, util.AWSAuthKey)
 	}
 
-	return keyID, keySecret, found, nil
+	return found, keyID, keySecret, nil
 }

@@ -381,8 +381,7 @@ func (opt *VCreateDatabaseOptions) ValidateAnalyzeOptions() error {
 	if err := opt.validateParseOptions(); err != nil {
 		return err
 	}
-	err := opt.analyzeOptions()
-	return err
+	return opt.analyzeOptions()
 }
 
 func (vcc *VClusterCommands) VCreateDatabase(options *VCreateDatabaseOptions) (VCoordinationDatabase, error) {
@@ -480,7 +479,7 @@ func produceBasicCreateDBInstructions(vdb *VCoordinationDatabase, options *VCrea
 	}
 
 	nmaPrepareDirectoriesOp, err := makeNMAPrepareDirectoriesOp(vdb.HostNodeMap,
-		false /*force cleanup*/, false /*for db revive*/)
+		*options.ForceRemovalAtCreation, false /*for db revive*/)
 	if err != nil {
 		return instructions, err
 	}
