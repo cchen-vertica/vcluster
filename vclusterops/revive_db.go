@@ -40,6 +40,7 @@ type VReviveDatabaseOptions struct {
 	CommunalStorageParameters map[string]string
 	LoadCatalogTimeout        *uint
 	ForceRemoval              *bool
+	DisplayOnly               *bool
 }
 
 func VReviveDBOptionsFactory() VReviveDatabaseOptions {
@@ -60,6 +61,7 @@ func (options *VReviveDatabaseOptions) setDefaultValues() {
 	options.LoadCatalogTimeout = new(uint)
 	*options.LoadCatalogTimeout = util.DefaultLoadCatalogTimeoutSeconds
 	options.ForceRemoval = new(bool)
+	options.DisplayOnly = new(bool)
 }
 
 func (options *VReviveDatabaseOptions) validateRequiredOptions() error {
@@ -108,7 +110,7 @@ func (options *VReviveDatabaseOptions) ValidateAnalyzeOptions() error {
 }
 
 // VReviveDatabase can revive a database which has been terminated but its communal storage data still exists
-func (vcc *VClusterCommands) VReviveDatabase(options *VReviveDatabaseOptions) error {
+func (vcc *VClusterCommands) VReviveDatabase(options *VReviveDatabaseOptions) (dbInfo string, err error) {
 	/*
 	 *   - Validate options
 	 *   - Run VClusterOpEngine to get terminated database info
@@ -116,9 +118,9 @@ func (vcc *VClusterCommands) VReviveDatabase(options *VReviveDatabaseOptions) er
 	 */
 
 	// validate and analyze options
-	err := options.ValidateAnalyzeOptions()
+	err = options.ValidateAnalyzeOptions()
 	if err != nil {
-		return err
+		return dbInfo, err
 	}
 
 	vdb := MakeVCoordinationDatabase()
@@ -127,7 +129,7 @@ func (vcc *VClusterCommands) VReviveDatabase(options *VReviveDatabaseOptions) er
 	preReviveDBInstructions, err := producePreReviveDBInstructions(options, &vdb)
 	if err != nil {
 		vlog.LogPrintError("fail to production pre-revive database instructions %v", err)
-		return err
+		return dbInfo, err
 	}
 
 	// generate clusterOpEngine certs
@@ -137,14 +139,19 @@ func (vcc *VClusterCommands) VReviveDatabase(options *VReviveDatabaseOptions) er
 	err = clusterOpEngine.Run()
 	if err != nil {
 		vlog.LogPrintError("fail to collect the information of database in revive_db %v", err)
-		return err
+		return dbInfo, err
+	}
+
+	if *options.DisplayOnly {
+		dbInfo = clusterOpEngine.execContext.dbInfo
+		return dbInfo, nil
 	}
 
 	// part 2: produce instructions for reviving database using terminated database info
 	reviveDBInstructions, err := produceReviveDBInstructions(options, &vdb)
 	if err != nil {
 		vlog.LogPrintError("fail to production revive database instructions %v", err)
-		return err
+		return dbInfo, err
 	}
 
 	// feed revive db instructions to the VClusterOpEngine
@@ -152,9 +159,9 @@ func (vcc *VClusterCommands) VReviveDatabase(options *VReviveDatabaseOptions) er
 	err = clusterOpEngine.Run()
 	if err != nil {
 		vlog.LogPrintError("fail to revive database %v", err)
-		return err
+		return dbInfo, err
 	}
-	return nil
+	return dbInfo, nil
 }
 
 // revive db instructions are split into two parts:

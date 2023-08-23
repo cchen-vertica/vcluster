@@ -43,6 +43,8 @@ func makeCmdReviveDB() *CmdReviveDB {
 	reviveDBOptions.LoadCatalogTimeout = newCmd.parser.Uint("load-catalog-timeout", util.DefaultLoadCatalogTimeoutSeconds,
 		util.GetOptionalFlagMsg("Set a timeout (in seconds) for loading remote catalog operation, default timeout is "+
 			strconv.Itoa(util.DefaultLoadCatalogTimeoutSeconds)+"seconds"))
+	reviveDBOptions.DisplayOnly = newCmd.parser.Bool("display-only", false,
+		util.GetOptionalFlagMsg("Describe the database on communal storage, and exit"))
 
 	newCmd.reviveDBOptions = &reviveDBOptions
 
@@ -101,10 +103,15 @@ func (c *CmdReviveDB) Run(log logr.Logger) error {
 		Log: log.WithName(c.CommandType()),
 	}
 	vcc.Log.V(1).Info("Called method Run()")
-	err := vcc.VReviveDatabase(c.reviveDBOptions)
+	dbInfo, err := vcc.VReviveDatabase(c.reviveDBOptions)
 	if err != nil {
 		vcc.Log.Error(err, "fail to revive database %s", *c.reviveDBOptions.Name)
 		return err
+	}
+
+	if *c.reviveDBOptions.DisplayOnly {
+		vlog.LogPrintInfo("database details: %s", dbInfo)
+		return nil
 	}
 
 	vlog.LogPrintInfo("Successfully revived database %s", *c.reviveDBOptions.Name)

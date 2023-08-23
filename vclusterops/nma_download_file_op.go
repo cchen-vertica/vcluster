@@ -131,7 +131,7 @@ type fileContent struct {
 	} `json:"StorageLocation"`
 }
 
-func (op *NMADownloadFileOp) processResult(_ *OpEngineExecContext) error {
+func (op *NMADownloadFileOp) processResult(execContext *OpEngineExecContext) error {
 	var allErrs error
 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
@@ -152,6 +152,9 @@ func (op *NMADownloadFileOp) processResult(_ *OpEngineExecContext) error {
 				allErrs = errors.Join(allErrs, err)
 				break
 			}
+
+			// save file content to dbInfo
+			execContext.dbInfo = response.FileContent
 
 			// file content in the response is a string, we need to unmarshal it again
 			descFileContent := fileContent{}
