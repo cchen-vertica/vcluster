@@ -65,17 +65,6 @@ func makeNMADownloadFileOp(hosts, newNodes []string, sourceFilePath, destination
 		requestData.SourceFilePath = sourceFilePath
 		requestData.DestinationFilePath = destinationFilePath
 		requestData.CatalogPath = catalogPath
-		// if aws auth is specified in communal storage params, we extract it.
-		// create aws_access_key_id and aws_secret_access_key using aws auth for calling NMA /vertica/download-file.
-		// the aws auth needs extra process in NMA compared to other cloud providers' auths.
-		found, awsKeyID, awsKeySecret, err := extractAWSAuthFromParameters(communalStorageParameters)
-		if err != nil {
-			return op, fmt.Errorf("[%s] %w", op.name, err)
-		}
-		if found {
-			requestData.AWSAccessKeyID = awsKeyID
-			requestData.AWSSecretAccessKey = awsKeySecret
-		}
 		requestData.Parameters = communalStorageParameters
 
 		dataBytes, err := json.Marshal(requestData)

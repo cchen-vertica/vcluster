@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"path"
-	"strings"
 
 	"github.com/vertica/vcluster/vclusterops/util"
 	"github.com/vertica/vcluster/vclusterops/vlog"
@@ -189,24 +188,4 @@ func appendHTTPSFailureError(allErrs error) error {
 func getInitiator(hosts []string) string {
 	// simply use the first one in user input
 	return hosts[0]
-}
-
-// extractAWSAuthFromParameterMap will find AWS auth from communal storage params, split it into keyID and keySecret,
-// and remove it from communal storage params
-func extractAWSAuthFromParameters(communalStorageParameters map[string]string) (found bool, keyID, keySecret string, err error) {
-	if auth, exist := communalStorageParameters[util.AWSAuthKey]; exist {
-		found = true
-
-		// awsauth format will be keyID:keySecret
-		auths := strings.Split(auth, ":")
-		if len(auths) == numOfAWSAuthComponents {
-			keyID = strings.TrimSpace(auths[0])
-			keySecret = strings.TrimSpace(auths[1])
-		} else {
-			return found, keyID, keySecret, fmt.Errorf("invalid AWS Auth value found in communal storage params")
-		}
-		delete(communalStorageParameters, util.AWSAuthKey)
-	}
-
-	return found, keyID, keySecret, nil
 }

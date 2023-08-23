@@ -95,17 +95,6 @@ func (op *nmaLoadRemoteCatalogOp) setupRequestBody(execContext *OpEngineExecCont
 		requestData.NodeName = vNode.Name
 		requestData.CatalogPath = vNode.CatalogPath
 		requestData.StorageLocations = vNode.StorageLocations
-		// if aws auth is specified in communal storage params, we extract it.
-		// create aws_access_key_id and aws_secret_access_key using aws auth for calling NMA /catalog/revive.
-		// the aws auth needs extra process in NMA compared to other cloud providers' auths.
-		found, awsKeyID, awsKeySecret, err := extractAWSAuthFromParameters(op.communalStorageParameters)
-		if err != nil {
-			return fmt.Errorf("[%s] %w", op.name, err)
-		}
-		if found {
-			requestData.AWSAccessKeyID = awsKeyID
-			requestData.AWSSecretAccessKey = awsKeySecret
-		}
 		requestData.NodeAddresses = nodeAddresses
 		requestData.Parameters = op.communalStorageParameters
 
