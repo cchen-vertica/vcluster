@@ -75,7 +75,8 @@ func (options *VReviveDatabaseOptions) validateRequiredOptions() error {
 	}
 
 	// new hosts
-	if len(options.RawHosts) == 0 {
+	// when --display-only is not specified, we require --hosts
+	if len(options.RawHosts) == 0 && !*options.DisplayOnly {
 		return fmt.Errorf("must specify a host or host list")
 	}
 
@@ -93,6 +94,11 @@ func (options *VReviveDatabaseOptions) validateParseOptions() error {
 
 // analyzeOptions will modify some options based on what is chosen
 func (options *VReviveDatabaseOptions) analyzeOptions() (err error) {
+	// when --display-only is specified but no hosts in user input, we will try to access communal storage from localhost
+	if len(options.RawHosts) == 0 && *options.DisplayOnly {
+		options.RawHosts = append(options.RawHosts, "localhost")
+	}
+
 	// resolve RawHosts to be IP addresses
 	options.Hosts, err = util.ResolveRawHostsToAddresses(options.RawHosts, options.Ipv6.ToBool())
 	if err != nil {
@@ -194,7 +200,7 @@ func producePreReviveDBInstructions(options *VReviveDatabaseOptions, vdb *VCoord
 	// description file directory will be in the location like: s3://tfminio/test_db/metadata/test_db/cluster_config.json
 	sourceFilePath := filepath.Join(*options.CommunalStorageLocation, sourceFileMetadataFolder, *options.Name, sourceFileName)
 	nmaDownLoadFileOp, err := makeNMADownloadFileOp(bootstrapHost, options.Hosts, sourceFilePath, destinationFilePath, catalogPath,
-		options.CommunalStorageParameters, vdb)
+		options.CommunalStorageParameters, vdb, *options.DisplayOnly)
 	if err != nil {
 		return instructions, err
 	}

@@ -38,7 +38,8 @@ type NMADownloadFileOp struct {
 	// vdb will be used to save downloaded file info for revive_db
 	vdb *VCoordinationDatabase
 	// newNodes is used to verify node number in http response for revive_db
-	newNodes []string
+	newNodes    []string
+	displayOnly bool
 }
 
 type downloadFileRequestData struct {
@@ -51,12 +52,13 @@ type downloadFileRequestData struct {
 }
 
 func makeNMADownloadFileOp(hosts, newNodes []string, sourceFilePath, destinationFilePath, catalogPath string,
-	communalStorageParameters map[string]string, vdb *VCoordinationDatabase) (NMADownloadFileOp, error) {
+	communalStorageParameters map[string]string, vdb *VCoordinationDatabase, displayOnly bool) (NMADownloadFileOp, error) {
 	op := NMADownloadFileOp{}
 	op.name = "NMADownloadFileOp"
 	op.hosts = hosts
 	op.vdb = vdb
 	op.newNodes = newNodes
+	op.displayOnly = displayOnly
 
 	// make https json data
 	op.hostRequestBodyMap = make(map[string]string)
@@ -153,8 +155,11 @@ func (op *NMADownloadFileOp) processResult(execContext *OpEngineExecContext) err
 				break
 			}
 
-			// save file content to dbInfo
-			execContext.dbInfo = response.FileContent
+			// for --display-only, we only need the file content
+			if op.displayOnly {
+				execContext.dbInfo = response.FileContent
+				return nil
+			}
 
 			// file content in the response is a string, we need to unmarshal it again
 			descFileContent := fileContent{}
