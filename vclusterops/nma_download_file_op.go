@@ -67,16 +67,16 @@ func (e *ClusterLeaseNotExpiredError) Error() string {
 		e.Expiration)
 }
 
-// ReviveDBNodeCountMismatch is returned when the number of nodes in new cluster
+// ReviveDBNodeCountMismatchError is returned when the number of nodes in new cluster
 // does not match the number of nodes in original cluster
-type ReviveDBNodeCountMismatch struct {
+type ReviveDBNodeCountMismatchError struct {
 	ReviveDBStep  string
 	FailureHost   string
 	NumOfNewNodes int
 	NumOfOldNodes int
 }
 
-func (e *ReviveDBNodeCountMismatch) Error() string {
+func (e *ReviveDBNodeCountMismatchError) Error() string {
 	return fmt.Sprintf(`[%s] nodes mismatch found on host %s: the number of the new nodes in --hosts is %d,`+
 		` but the number of the old nodes in description file is %d`,
 		e.ReviveDBStep, e.FailureHost, e.NumOfNewNodes, e.NumOfOldNodes)
@@ -210,7 +210,7 @@ func (op *NMADownloadFileOp) processResult(execContext *OpEngineExecContext) err
 			}
 
 			if len(descFileContent.NodeList) != len(op.newNodes) {
-				err := &ReviveDBNodeCountMismatch{
+				err := &ReviveDBNodeCountMismatchError{
 					ReviveDBStep:  op.name,
 					FailureHost:   host,
 					NumOfNewNodes: len(op.newNodes),
