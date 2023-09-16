@@ -154,7 +154,7 @@ func (vcc *VClusterCommands) produceReIPInstructions(options *VReIPOptions) ([]C
 	hosts := options.Hosts
 
 	nmaHealthOp := makeNMAHealthOp(hosts)
-	nmaVerticaVersionOp := makeNMAVerticaVersionOp(vcc.Log, hosts, true)
+	nmaVerticaVersionOp := makeNMAVerticaVersionOp(vcc.Log, hosts, false)
 
 	// get network profiles of the new addresses
 	var newAddresses []string
