@@ -54,6 +54,7 @@ func (op *NMAReadCatalogEditorOp) setupClusterHTTPRequest(hosts []string) error 
 	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
 	op.setVersionToSemVar()
 
+	vlog.LogPrintInfo("[%s] caitest map is %v", op.name, op.catalogPathMap)
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = GetMethod

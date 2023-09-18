@@ -72,6 +72,7 @@ func makeNMAUploadConfigOp(
 func (op *NMAUploadConfigOp) setupRequestBody(hosts []string) error {
 	op.hostRequestBodyMap = make(map[string]string)
 
+	vlog.LogPrintInfo("[%s] caitest map is %v", op.name, op.catalogPathMap)
 	for _, host := range hosts {
 		uploadConfigData := uploadConfigRequestData{}
 		uploadConfigData.CatalogPath = op.catalogPathMap[host]
