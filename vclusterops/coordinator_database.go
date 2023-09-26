@@ -312,6 +312,22 @@ func (vdb *VCoordinationDatabase) GetAwsCredentialsFromEnv() error {
 	return nil
 }
 
+// filterOutSecondaryNodes will remove secondary nodes from vdb
+func (vdb *VCoordinationDatabase) filterOutSecondaryNodes() {
+	hostsToDelete := []string{}
+
+	for h, vnode := range vdb.HostNodeMap {
+		if !vnode.IsPrimary {
+			hostsToDelete = append(hostsToDelete, h)
+		}
+	}
+	for _, host := range hostsToDelete {
+		delete(vdb.HostNodeMap, host)
+	}
+
+	vdb.HostList = util.SliceDiff(vdb.HostList, hostsToDelete)
+}
+
 /* VCoordinationNode contains a copy of the some of CAT::Node information
  * from the database catalog (visible in the vs_nodes table). It is similar
  * to the admintools VNode object.

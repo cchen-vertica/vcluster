@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/vertica/vcluster/vclusterops/util"
 	"github.com/vertica/vcluster/vclusterops/vlog"
@@ -37,8 +38,10 @@ type DatabaseOptions struct {
 	ConfigDirectory *string
 
 	// part 2: Eon database info
-	DepotPrefix *string
-	IsEon       vstruct.NullableBool
+	DepotPrefix               *string
+	IsEon                     vstruct.NullableBool
+	CommunalStorageLocation   *string
+	CommunalStorageParameters map[string]string
 
 	// part 3: authentication info
 	UserName *string
@@ -52,6 +55,13 @@ type DatabaseOptions struct {
 	HonorUserInput *bool
 	usePassword    bool
 }
+
+const (
+	descriptionFileName = "cluster_config.json"
+	destinationFilePath = "/tmp/desc.json"
+	// catalogPath is not used for now, will implement it in VER-88884
+	catalogPath = ""
+)
 
 const (
 	commandCreateDB   = "create_db"
@@ -70,6 +80,8 @@ func (opt *DatabaseOptions) SetDefaultValues() {
 	opt.HonorUserInput = new(bool)
 	opt.Ipv6 = vstruct.NotSet
 	opt.IsEon = vstruct.NotSet
+	opt.CommunalStorageLocation = new(string)
+	opt.CommunalStorageParameters = make(map[string]string)
 }
 
 func (opt *DatabaseOptions) CheckNilPointerParams() error {
@@ -380,4 +392,91 @@ func (opt *DatabaseOptions) normalizePaths() {
 	*opt.CatalogPrefix = util.GetCleanPath(*opt.CatalogPrefix)
 	*opt.DataPrefix = util.GetCleanPath(*opt.DataPrefix)
 	*opt.DepotPrefix = util.GetCleanPath(*opt.DepotPrefix)
+}
+
+// getVDBWhenDBIsDown can retrieve db configurations from NMA /nodes endpoint and cluster_config.json when db is down
+func (opt *DatabaseOptions) getVDBWhenDBIsDown() (vdb VCoordinationDatabase, err error) {
+	/*
+	 *   - 1. Get node names for input hosts from NMA /nodes.
+	 *   - 2. Get other node information for input hosts from cluster_config.json.
+	 *   - 3. Build vdb for input hosts using the information from step 1 and step 2.
+	 *   Note: the node IPs in cluster_config.json are old and cannot be mapped to input hosts so we need
+	 *   node names(retrieved from NMA /nodes) as a bridge to connect cluster_config.json and input hosts.
+	 */
+
+	// step 1: get node names by calling NMA /nodes on input hosts
+	// this step can map input hosts with node names
+	vdb1 := VCoordinationDatabase{}
+	var instructions1 []ClusterOp
+	nmaHealthOp := makeNMAHealthOp(opt.Hosts)
+	nmaGetNodesInfoOp := makeNMAGetNodesInfoOp(opt.Hosts, *opt.DBName, *opt.CatalogPrefix, &vdb1)
+	instructions1 = append(instructions1,
+		&nmaHealthOp,
+		&nmaGetNodesInfoOp,
+	)
+
+	certs := HTTPSCerts{key: opt.Key, cert: opt.Cert, caCert: opt.CaCert}
+	clusterOpEngine := MakeClusterOpEngine(instructions1, &certs)
+	err = clusterOpEngine.Run()
+	if err != nil {
+		vlog.LogPrintError("fail to retrieve node names from NMA /nodes: %v", err)
+		return vdb, err
+	}
+
+	// step 2: get node details from cluster_config.json
+	vdb2 := VCoordinationDatabase{}
+	var instructions2 []ClusterOp
+	sourceFilePath := opt.getDescriptionFilePath()
+	nmaDownLoadFileOp, err := makeNMADownloadFileOp(opt.Hosts, sourceFilePath, destinationFilePath, catalogPath,
+		opt.CommunalStorageParameters, &vdb2)
+	if err != nil {
+		return vdb, err
+	}
+	instructions2 = append(instructions2, &nmaDownLoadFileOp)
+
+	clusterOpEngine = MakeClusterOpEngine(instructions2, &certs)
+	err = clusterOpEngine.Run()
+	if err != nil {
+		vlog.LogPrintError("fail to retrieve node details from %s: %v", descriptionFileName, err)
+		return vdb, err
+	}
+
+	// step 3: build vdb for input hosts using node names from step 1 and node details from step 2
+	// this step can map input hosts with node details
+	vdb.HostList = vdb1.HostList
+	vdb.HostNodeMap = makeVHostNodeMap()
+	for h1, vnode1 := range vdb1.HostNodeMap {
+		nodeName := vnode1.Name
+		found := false
+		for _, vnode2 := range vdb2.HostNodeMap {
+			if vnode2.Name != nodeName {
+				continue
+			}
+			vnode := vnode2
+			// update nodes' addresses using input hosts
+			vnode.Address = h1
+			vdb.HostNodeMap[h1] = vnode
+			found = true
+			break
+		}
+		if !found {
+			return vdb, fmt.Errorf("node name %s is not found in %s", nodeName, descriptionFileName)
+		}
+	}
+	return vdb, nil
+}
+
+// getDescriptionFilePath can make the description file path using db name and communal storage location in the options
+func (opt *DatabaseOptions) getDescriptionFilePath() string {
+	const (
+		descriptionFileMetadataFolder = "metadata"
+	)
+	// description file will be in the location: {communalStorageLocation}/metadata/{db_name}/cluster_config.json
+	// an example: s3://tfminio/test_loc/metadata/test_db/cluster_config.json
+	descriptionFilePath := filepath.Join(*opt.CommunalStorageLocation, descriptionFileMetadataFolder, *opt.DBName, descriptionFileName)
+	// filepath.Join() will change "://" of the remote communal storage path to ":/"
+	// as a result, we need to change the separator back to url format
+	descriptionFilePath = strings.Replace(descriptionFilePath, ":/", "://", 1)
+
+	return descriptionFilePath
 }
