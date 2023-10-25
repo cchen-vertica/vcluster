@@ -126,7 +126,6 @@ func (vcc *VClusterCommands) VDropDatabase(options *VDropDatabaseOptions) error 
 // The generated instructions will later perform the following operations necessary
 // for a successful drop_db:
 //   - Check NMA connectivity
-//   - Check Vertica versions
 //   - Check to see if any dbs running
 //   - Delete directories
 func (vcc *VClusterCommands) produceDropDBInstructions(vdb *VCoordinationDatabase, options *VDropDatabaseOptions) ([]ClusterOp, error) {
@@ -144,9 +143,6 @@ func (vcc *VClusterCommands) produceDropDBInstructions(vdb *VCoordinationDatabas
 
 	nmaHealthOp := makeNMAHealthOp(vcc.Log, hosts)
 
-	// require to have the same vertica version
-	nmaVerticaVersionOp := makeNMAVerticaVersionOp(vcc.Log, hosts, true)
-
 	// when checking the running database,
 	// drop_db has the same checking items with create_db
 	checkDBRunningOp, err := makeHTTPCheckRunningDBOp(vcc.Log, hosts, usePassword,
@@ -162,7 +158,6 @@ func (vcc *VClusterCommands) produceDropDBInstructions(vdb *VCoordinationDatabas
 
 	instructions = append(instructions,
 		&nmaHealthOp,
-		&nmaVerticaVersionOp,
 		&checkDBRunningOp,
 		&nmaDeleteDirectoriesOp,
 	)

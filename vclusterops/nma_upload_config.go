@@ -91,6 +91,10 @@ func (op *NMAUploadConfigOp) setupRequestBody(hosts []string) error {
 }
 
 func (op *NMAUploadConfigOp) setupClusterHTTPRequest(hosts []string) error {
+	op.clusterHTTPRequest = ClusterHTTPRequest{}
+	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
+	op.setVersionToSemVar()
+
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PostMethod

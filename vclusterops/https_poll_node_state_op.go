@@ -18,7 +18,6 @@ package vclusterops
 import (
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 
 	"github.com/vertica/vcluster/vclusterops/util"
@@ -49,11 +48,9 @@ func (cmd CmdType) String() string {
 type HTTPSPollNodeStateOp struct {
 	OpBase
 	OpHTTPSBase
-	allHosts   map[string]any
-	upHosts    map[string]any
-	notUpHosts []string
-	timeout    int
-	cmdType    CmdType
+	notUpHost string
+	timeout   int
+	cmdType   CmdType
 }
 
 func makeHTTPSPollNodeStateOpHelper(log vlog.Printer, hosts []string,
@@ -71,11 +68,6 @@ func makeHTTPSPollNodeStateOpHelper(log vlog.Printer, hosts []string,
 	httpsPollNodeStateOp.userName = userName
 	httpsPollNodeStateOp.httpsPassword = httpsPassword
 
-	httpsPollNodeStateOp.upHosts = make(map[string]any)
-	httpsPollNodeStateOp.allHosts = make(map[string]any)
-	for _, h := range hosts {
-		httpsPollNodeStateOp.allHosts[h] = struct{}{}
-	}
 	return httpsPollNodeStateOp, nil
 }
 
@@ -112,6 +104,10 @@ func (op *HTTPSPollNodeStateOp) getPollingTimeout() int {
 }
 
 func (op *HTTPSPollNodeStateOp) setupClusterHTTPRequest(hosts []string) error {
+	op.clusterHTTPRequest = ClusterHTTPRequest{}
+	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
+	op.setVersionToSemVar()
+
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = GetMethod
@@ -149,10 +145,9 @@ func (op *HTTPSPollNodeStateOp) finalize(_ *OpEngineExecContext) error {
 func (op *HTTPSPollNodeStateOp) processResult(execContext *OpEngineExecContext) error {
 	err := pollState(op, execContext)
 	if err != nil {
-		// show the hosts that are not UP
-		sort.Strings(op.notUpHosts)
-		msg := fmt.Sprintf("The following hosts are not up after %d seconds: %v, details: %s",
-			op.timeout, op.notUpHosts, err)
+		// show the host that is not UP
+		msg := fmt.Sprintf("The host %s is not up after %d seconds, details: %s",
+			op.notUpHost, op.timeout, err)
 		op.log.PrintError(msg)
 		return errors.New(msg)
 	}
@@ -223,6 +218,7 @@ func (op *HTTPSPollNodeStateOp) shouldStopPolling() (bool, error) {
 
 		// if we cannot get correct response in current node, we assume the node is not up and wait for the next poll.
 		// if the node is busy and cannot return correct response in this poll, the following polls should get correct response from it.
+		op.notUpHost = host
 		return false, nil
 	}
 

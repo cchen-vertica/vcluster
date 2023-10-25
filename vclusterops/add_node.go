@@ -179,7 +179,7 @@ func (vcc *VClusterCommands) VAddNode(options *VAddNodeOptions) (VCoordinationDa
 		return vdb, err
 	}
 
-	err = vdb.addHosts(options.NewHosts)
+	err = vdb.addHosts(options.NewHosts, *options.SCName)
 	if err != nil {
 		return vdb, err
 	}
@@ -319,9 +319,9 @@ func (vcc *VClusterCommands) trimNodesInCatalog(vdb *VCoordinationDatabase,
 // The generated instructions will later perform the following operations necessary
 // for a successful add_node:
 //   - Check NMA connectivity
-//   - Check NMA versions
 //   - If we have subcluster in the input, check if the subcluster exists. If not, we stop.
 //     If we do not have a subcluster in the input, fetch the current default subcluster name
+//   - Check NMA versions
 //   - Prepare directories
 //   - Get network profiles
 //   - Create the new node
@@ -343,11 +343,7 @@ func (vcc *VClusterCommands) produceAddNodeInstructions(vdb *VCoordinationDataba
 	password := options.Password
 
 	nmaHealthOp := makeNMAHealthOp(vcc.Log, vdb.HostList)
-	// require to have the same vertica version
-	nmaVerticaVersionOp := makeNMAVerticaVersionOp(vcc.Log, vdb.HostList, true)
-	instructions = append(instructions,
-		&nmaHealthOp,
-		&nmaVerticaVersionOp)
+	instructions = append(instructions, &nmaHealthOp)
 
 	if vdb.IsEon {
 		httpsFindSubclusterOp, e := makeHTTPSFindSubclusterOp(
@@ -358,6 +354,10 @@ func (vcc *VClusterCommands) produceAddNodeInstructions(vdb *VCoordinationDataba
 		}
 		instructions = append(instructions, &httpsFindSubclusterOp)
 	}
+
+	// require to have the same vertica version
+	nmaVerticaVersionOp := makeNMAVerticaVersionOpWithVDB(vcc.Log, true, vdb)
+	instructions = append(instructions, &nmaVerticaVersionOp)
 
 	// this is a copy of the original HostNodeMap that only
 	// contains the hosts to add.

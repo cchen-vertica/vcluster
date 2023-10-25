@@ -215,7 +215,7 @@ func (vcc *VClusterCommands) produceRestartNodesInstructions(restartNodeInfo *VR
 
 	nmaHealthOp := makeNMAHealthOp(vcc.Log, options.Hosts)
 	// require to have the same vertica version
-	nmaVerticaVersionOp := makeNMAVerticaVersionOp(vcc.Log, options.Hosts, true)
+	nmaVerticaVersionOp := makeNMAVerticaVersionOpWithVDB(vcc.Log, true, vdb)
 	// need username for https operations
 	err := options.SetUsePassword(vcc.Log)
 	if err != nil {
