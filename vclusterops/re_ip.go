@@ -162,7 +162,6 @@ func (vcc *VClusterCommands) VReIP(options *VReIPOptions) error {
 //   - Check NMA connectivity
 //   - Read database info from catalog editor
 //     (now we should know which hosts have the latest catalog)
-//   - Check Vertica versions
 //   - Run re-ip on the target nodes
 func (vcc *VClusterCommands) produceReIPInstructions(options *VReIPOptions, vdb *VCoordinationDatabase) ([]ClusterOp, error) {
 	var instructions []ClusterOp
@@ -213,17 +212,12 @@ func (vcc *VClusterCommands) produceReIPInstructions(options *VReIPOptions, vdb 
 		instructions = append(instructions, &nmaReadCatEdOp)
 	}
 
-	nmaVerticaVersionOp := makeNMAVerticaVersionOpWithoutHosts(vcc.Log, true)
-
 	// re-ip
 	// at this stage the re-ip info should either by provided by
 	// the re-ip file (for vcluster CLI) or the Kubernetes operator
 	nmaReIPOP := makeNMAReIPOp(vcc.Log, options.ReIPList, vdb)
 
-	instructions = append(instructions,
-		&nmaVerticaVersionOp,
-		&nmaReIPOP,
-	)
+	instructions = append(instructions, &nmaReIPOP)
 
 	return instructions, nil
 }
