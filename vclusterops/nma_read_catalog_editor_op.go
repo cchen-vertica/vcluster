@@ -147,8 +147,14 @@ type NmaVNode struct {
 	SiteUniqueID         json.Number `json:"site_unique_id"`
 	StartCommand         []string    `json:"start_command"`
 	StorageLocations     []string    `json:"storage_locations"`
-	Subcluster           string      `json:"sc_name"`
-	Tag                  json.Number `json:"tag"`
+	Subcluster           struct {
+		Name      string `json:"sc_name"`
+		IsPrimary bool   `json:"is_primary_sc"`
+		IsDefault bool   `json:"is_default"`
+		IsSandbox bool   `json:"sandbox"`
+	} `json:"sc_details"`
+
+	Tag json.Number `json:"tag"`
 }
 
 type NmaVDatabase struct {

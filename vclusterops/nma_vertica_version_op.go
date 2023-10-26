@@ -112,7 +112,7 @@ func (op *NMAVerticaVersionOp) prepare(execContext *OpEngineExecContext) error {
 		for host, vnode := range execContext.nmaVDatabase.HostNodeMap {
 			op.hosts = append(op.hosts, host)
 			// initialize the SCToHostVersionMap with empty versions
-			sc := vnode.Subcluster
+			sc := vnode.Subcluster.Name
 			if op.SCToHostVersionMap[sc] == nil {
 				op.SCToHostVersionMap[sc] = make(map[string]string)
 			}
@@ -127,6 +127,8 @@ func (op *NMAVerticaVersionOp) prepare(execContext *OpEngineExecContext) error {
 			op.SCToHostVersionMap[sc][host] = ""
 		}
 	}
+
+	op.log.PrintInfo("caitest SCToHostVersionMap is %+v", op.SCToHostVersionMap)
 
 	execContext.dispatcher.Setup(op.hosts)
 
