@@ -51,6 +51,10 @@ func makeNMADownloadConfigOp(
 }
 
 func (op *NMADownloadConfigOp) setupClusterHTTPRequest(hosts []string) error {
+	op.clusterHTTPRequest = ClusterHTTPRequest{}
+	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
+	op.setVersionToSemVar()
+
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = GetMethod

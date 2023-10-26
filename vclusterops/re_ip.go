@@ -160,7 +160,6 @@ func (vcc *VClusterCommands) VReIP(options *VReIPOptions) error {
 // The generated instructions will later perform the following operations necessary
 // for a successful re_ip:
 //   - Check NMA connectivity
-//   - Check Vertica versions
 //   - Read database info from catalog editor
 //     (now we should know which hosts have the latest catalog)
 //   - Run re-ip on the target nodes
@@ -174,7 +173,6 @@ func (vcc *VClusterCommands) produceReIPInstructions(options *VReIPOptions, vdb 
 	hosts := options.Hosts
 
 	nmaHealthOp := makeNMAHealthOp(vcc.Log, hosts)
-	nmaVerticaVersionOp := makeNMAVerticaVersionOp(vcc.Log, hosts, true)
 
 	// get network profiles of the new addresses
 	var newAddresses []string
@@ -185,7 +183,6 @@ func (vcc *VClusterCommands) produceReIPInstructions(options *VReIPOptions, vdb 
 
 	instructions = append(instructions,
 		&nmaHealthOp,
-		&nmaVerticaVersionOp,
 		&nmaNetworkProfileOp,
 	)
 

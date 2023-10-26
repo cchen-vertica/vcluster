@@ -466,7 +466,7 @@ func (vcc *VClusterCommands) produceCreateDBBootstrapInstructions(
 	nmaHealthOp := makeNMAHealthOp(vcc.Log, hosts)
 
 	// require to have the same vertica version
-	nmaVerticaVersionOp := makeNMAVerticaVersionOp(vcc.Log, hosts, true)
+	nmaVerticaVersionOp := makeNMAVerticaVersionOp(vcc.Log, hosts, true, vdb.IsEon)
 
 	// need username for https operations
 	err := options.ValidateUserName(vcc.Log)

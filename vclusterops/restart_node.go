@@ -197,13 +197,14 @@ func (vcc *VClusterCommands) VRestartNodes(options *VRestartNodesOptions) error 
 // The generated instructions will later perform the following operations necessary
 // for a successful restart_node:
 //   - Check NMA connectivity
-//   - Check Vertica versions
-//   - Call network profile
-//   - Call https re-ip endpoint
-//   - Reload spread
 //   - Get UP nodes through HTTPS call, if any node is UP then the DB is UP and ready for starting nodes
-//   - Use any UP primary nodes as source host for syncing spread.conf and vertica.conf, source host can be picked
-//     by a HTTPS /v1/nodes call for finding UP primary nodes
+//   - If need to do re-ip:
+//     1. Call network profile
+//     2. Call https re-ip endpoint
+//     3. Reload spread
+//     4. Call https /v1/nodes to update nodes' info
+//   - Check Vertica versions
+//   - Use any UP primary nodes as source host for syncing spread.conf and vertica.conf
 //   - Sync the confs to the nodes to be restarted
 //   - Call https /v1/startup/command to get restart command of the nodes to be restarted
 //   - restart nodes
@@ -214,8 +215,6 @@ func (vcc *VClusterCommands) produceRestartNodesInstructions(restartNodeInfo *VR
 	var instructions []ClusterOp
 
 	nmaHealthOp := makeNMAHealthOp(vcc.Log, options.Hosts)
-	// require to have the same vertica version
-	nmaVerticaVersionOp := makeNMAVerticaVersionOp(vcc.Log, options.Hosts, true)
 	// need username for https operations
 	err := options.SetUsePassword(vcc.Log)
 	if err != nil {
@@ -229,7 +228,6 @@ func (vcc *VClusterCommands) produceRestartNodesInstructions(restartNodeInfo *VR
 	}
 	instructions = append(instructions,
 		&nmaHealthOp,
-		&nmaVerticaVersionOp,
 		&httpsGetUpNodesOp,
 	)
 
@@ -261,6 +259,10 @@ func (vcc *VClusterCommands) produceRestartNodesInstructions(restartNodeInfo *VR
 			&httpsGetNodesInfoOp,
 		)
 	}
+
+	// require to have the same vertica version
+	nmaVerticaVersionOp := makeNMAVerticaVersionOpWithVDB(vcc.Log, true, vdb)
+	instructions = append(instructions, &nmaVerticaVersionOp)
 
 	// The second parameter (sourceConfHost) in produceTransferConfigOps is set to a nil value in the upload and download step
 	// we use information from v1/nodes endpoint to get all node information to update the sourceConfHost value

@@ -35,6 +35,10 @@ func makeNMAHealthOp(log vlog.Printer, hosts []string) NMAHealthOp {
 
 // setupClusterHTTPRequest works as the module setup in Admintools
 func (op *NMAHealthOp) setupClusterHTTPRequest(hosts []string) error {
+	op.clusterHTTPRequest = ClusterHTTPRequest{}
+	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
+	op.setVersionToSemVar()
+
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = GetMethod
