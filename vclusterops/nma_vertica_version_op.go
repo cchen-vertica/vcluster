@@ -68,7 +68,6 @@ func makeNMAVerticaVersionOpWithoutHosts(log vlog.Printer, sameVersion bool) NMA
 func makeNMAVerticaVersionOpWithVDB(log vlog.Printer, sameVersion bool, vdb *VCoordinationDatabase) NMAVerticaVersionOp {
 	op := makeNMAVerticaVersionOp(log, nil, sameVersion, false)
 	op.vdb = vdb
-	op.hosts = vdb.HostList
 	op.IsEon = vdb.IsEon
 	return op
 }
@@ -103,6 +102,7 @@ func (op *NMAVerticaVersionOp) prepare(execContext *OpEngineExecContext) error {
 		 *
 	*/
 	if op.vdb != nil {
+		op.hosts = op.vdb.HostList
 		for host, vnode := range op.vdb.HostNodeMap {
 			sc := vnode.Subcluster
 			// Update subcluster of new nodes that will be assigned to default subcluster.
