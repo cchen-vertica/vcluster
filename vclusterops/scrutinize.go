@@ -13,24 +13,17 @@
  limitations under the License.
 */
 
-package main
+package vclusterops
 
 import (
 	"fmt"
-	"os"
-
-	"github.com/vertica/vcluster/commands"
 )
 
-func main() {
-	// use fmt for print info in this function, because the step of
-	// setting up logs could error out
-	fmt.Println("---{vcluster begin}---")
-	launcher, vcc := commands.MakeClusterCommandLauncher()
-	runError := launcher.Run(os.Args, vcc)
-	if runError != nil {
-		fmt.Printf("Error during execution: %s\n", runError)
-		os.Exit(1)
-	}
-	fmt.Println("---{vcluster end}---")
+type VScrutinizeOptions struct {
+	DatabaseOptions
+}
+
+func (vcc *VClusterCommands) VScrutinize(options *VScrutinizeOptions) error {
+	vcc.Log.V(0).Info("VScrutinize method called with options " + fmt.Sprintf("%#v", options))
+	return nil
 }

@@ -55,13 +55,13 @@ type VAddSubclusterInfo struct {
 func VAddSubclusterOptionsFactory() VAddSubclusterOptions {
 	opt := VAddSubclusterOptions{}
 	// set default values to the params
-	opt.SetDefaultValues()
+	opt.setDefaultValues()
 
 	return opt
 }
 
-func (options *VAddSubclusterOptions) SetDefaultValues() {
-	options.DatabaseOptions.SetDefaultValues()
+func (options *VAddSubclusterOptions) setDefaultValues() {
+	options.DatabaseOptions.setDefaultValues()
 
 	options.SCName = new(string)
 	options.IsPrimary = new(bool)
@@ -70,8 +70,8 @@ func (options *VAddSubclusterOptions) SetDefaultValues() {
 	options.CloneSC = new(string)
 }
 
-func (options *VAddSubclusterOptions) validateRequiredOptions() error {
-	err := options.ValidateBaseOptions("db_add_subcluster")
+func (options *VAddSubclusterOptions) validateRequiredOptions(log vlog.Printer) error {
+	err := options.validateBaseOptions("db_add_subcluster", log)
 	if err != nil {
 		return err
 	}
@@ -83,13 +83,18 @@ func (options *VAddSubclusterOptions) validateRequiredOptions() error {
 }
 
 func (options *VAddSubclusterOptions) validateEonOptions(config *ClusterConfig) error {
-	if !options.IsEonMode(config) {
+	isEon, err := options.isEonMode(config)
+	if err != nil {
+		return err
+	}
+
+	if !isEon {
 		return fmt.Errorf("add subcluster is only supported in Eon mode")
 	}
 	return nil
 }
 
-func (options *VAddSubclusterOptions) validateExtraOptions() error {
+func (options *VAddSubclusterOptions) validateExtraOptions(log vlog.Printer) error {
 	// control-set-size can only be -1 or [1 to 120]
 	if !(*options.ControlSetSize == ControlSetSizeDefaultValue ||
 		(*options.ControlSetSize >= ControlSetSizeLowerBound && *options.ControlSetSize <= ControlSetSizeUpperBound)) {
@@ -99,7 +104,7 @@ func (options *VAddSubclusterOptions) validateExtraOptions() error {
 
 	if *options.CloneSC != "" {
 		// TODO remove this log after we supported subcluster clone
-		vlog.LogPrintWarningln("option CloneSC is not implemented yet so it will be ignored")
+		log.PrintWarning("option CloneSC is not implemented yet so it will be ignored")
 	}
 
 	// verify the hosts of new subcluster does not exist in current database
@@ -119,15 +124,15 @@ func (options *VAddSubclusterOptions) validateExtraOptions() error {
 		}
 
 		// TODO remove this log after we supported adding subcluster with nodes
-		vlog.LogPrintWarningln("options SCRawHosts and SCHosts are not implemented yet so they will be ignored")
+		log.PrintWarning("options SCRawHosts and SCHosts are not implemented yet so they will be ignored")
 	}
 
 	return nil
 }
 
-func (options *VAddSubclusterOptions) validateParseOptions(config *ClusterConfig) error {
+func (options *VAddSubclusterOptions) validateParseOptions(config *ClusterConfig, vcc *VClusterCommands) error {
 	// batch 1: validate required parameters
-	err := options.validateRequiredOptions()
+	err := options.validateRequiredOptions(vcc.Log)
 	if err != nil {
 		return err
 	}
@@ -137,7 +142,7 @@ func (options *VAddSubclusterOptions) validateParseOptions(config *ClusterConfig
 		return err
 	}
 	// batch 3: validate all other params
-	err = options.validateExtraOptions()
+	err = options.validateExtraOptions(vcc.Log)
 	if err != nil {
 		return err
 	}
@@ -164,8 +169,8 @@ func (options *VAddSubclusterOptions) analyzeOptions() (err error) {
 	return nil
 }
 
-func (options *VAddSubclusterOptions) ValidateAnalyzeOptions(config *ClusterConfig) error {
-	if err := options.validateParseOptions(config); err != nil {
+func (options *VAddSubclusterOptions) validateAnalyzeOptions(config *ClusterConfig, vcc *VClusterCommands) error {
+	if err := options.validateParseOptions(config, vcc); err != nil {
 		return err
 	}
 	return options.analyzeOptions()
@@ -178,13 +183,8 @@ func (vcc *VClusterCommands) VAddSubcluster(options *VAddSubclusterOptions) erro
 	 *   - Create a VClusterOpEngine
 	 *   - Give the instructions to the VClusterOpEngine to run
 	 */
-	// get config from vertica_cluster.yaml
-	config, err := options.GetDBConfig()
-	if err != nil {
-		return err
-	}
 
-	err = options.ValidateAnalyzeOptions(config)
+	err := options.validateAnalyzeOptions(options.Config, vcc)
 	if err != nil {
 		return err
 	}
@@ -199,23 +199,24 @@ func (vcc *VClusterCommands) VAddSubcluster(options *VAddSubclusterOptions) erro
 		ControlSetSize: *options.ControlSetSize,
 		CloneSC:        *options.CloneSC,
 	}
-	addSubclusterInfo.DBName, addSubclusterInfo.Hosts = options.GetNameAndHosts(config)
-
-	instructions, err := produceAddSubclusterInstructions(&addSubclusterInfo, options)
+	addSubclusterInfo.DBName, addSubclusterInfo.Hosts, err = options.getNameAndHosts(options.Config)
 	if err != nil {
-		vlog.LogPrintError("fail to produce instructions, %s", err)
 		return err
+	}
+
+	instructions, err := vcc.produceAddSubclusterInstructions(&addSubclusterInfo, options)
+	if err != nil {
+		return fmt.Errorf("fail to produce instructions, %w", err)
 	}
 
 	// Create a VClusterOpEngine, and add certs to the engine
 	certs := HTTPSCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := MakeClusterOpEngine(instructions, &certs)
+	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
 
 	// Give the instructions to the VClusterOpEngine to run
-	runError := clusterOpEngine.Run()
+	runError := clusterOpEngine.run(vcc.Log)
 	if runError != nil {
-		vlog.LogPrintError("fail to add subcluster %s, %s", addSubclusterInfo.SCName, runError)
-		return runError
+		return fmt.Errorf("fail to add subcluster %s, %w", addSubclusterInfo.SCName, runError)
 	}
 
 	return nil
@@ -232,33 +233,34 @@ func (vcc *VClusterCommands) VAddSubcluster(options *VAddSubclusterOptions) erro
 //     if the subcluster name already exists or the db is an enterprise db
 //   - Check if the new subcluster is created in database through HTTPS call
 //   - TODO: add new nodes to the subcluster
-func produceAddSubclusterInstructions(addSubclusterInfo *VAddSubclusterInfo, options *VAddSubclusterOptions) ([]ClusterOp, error) {
+func (vcc *VClusterCommands) produceAddSubclusterInstructions(addSubclusterInfo *VAddSubclusterInfo,
+	options *VAddSubclusterOptions) ([]ClusterOp, error) {
 	var instructions []ClusterOp
 
 	// when password is specified, we will use username/password to call https endpoints
 	usePassword := false
 	if addSubclusterInfo.Password != nil {
 		usePassword = true
-		err := options.ValidateUserName()
+		err := options.validateUserName(vcc.Log)
 		if err != nil {
 			return instructions, err
 		}
 	}
 
 	username := *options.UserName
-	httpsGetUpNodesOp, err := makeHTTPSGetUpNodesOp(addSubclusterInfo.DBName, addSubclusterInfo.Hosts,
+	httpsGetUpNodesOp, err := makeHTTPSGetUpNodesOp(vcc.Log, addSubclusterInfo.DBName, addSubclusterInfo.Hosts,
 		usePassword, username, addSubclusterInfo.Password)
 	if err != nil {
 		return instructions, err
 	}
 
-	httpsAddSubclusterOp, err := makeHTTPSAddSubclusterOp(usePassword, username, addSubclusterInfo.Password,
+	httpsAddSubclusterOp, err := makeHTTPSAddSubclusterOp(vcc.Log, usePassword, username, addSubclusterInfo.Password,
 		addSubclusterInfo.SCName, addSubclusterInfo.IsPrimary, addSubclusterInfo.ControlSetSize)
 	if err != nil {
 		return instructions, err
 	}
 
-	httpsCheckSubclusterOp, err := makeHTTPSCheckSubclusterOp(usePassword, username, addSubclusterInfo.Password,
+	httpsCheckSubclusterOp, err := makeHTTPSCheckSubclusterOp(vcc.Log, usePassword, username, addSubclusterInfo.Password,
 		addSubclusterInfo.SCName, addSubclusterInfo.IsPrimary, addSubclusterInfo.ControlSetSize)
 	if err != nil {
 		return instructions, err

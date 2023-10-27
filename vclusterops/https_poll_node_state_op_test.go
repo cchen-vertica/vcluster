@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 func TestTimeoutCase(t *testing.T) {
@@ -28,12 +29,12 @@ func TestTimeoutCase(t *testing.T) {
 	hosts := []string{"192.0.2.1"}
 	username := "testUser"
 	password := "testPwd"
-	httpsPollNodeStateOp, err := makeHTTPSPollNodeStateOp(hosts, true, username, &password)
+	httpsPollNodeStateOp, err := makeHTTPSPollNodeStateOp(vlog.Printer{}, hosts, true, username, &password)
 	assert.Nil(t, err)
 	instructions = append(instructions, &httpsPollNodeStateOp)
 
 	certs := HTTPSCerts{}
-	clusterOpEngine := MakeClusterOpEngine(instructions, &certs)
-	err = clusterOpEngine.Run()
+	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+	err = clusterOpEngine.run(vlog.Printer{})
 	assert.ErrorContains(t, err, "[HTTPSPollNodeStateOp] cannot connect to host 192.0.2.1, please check if the host is still alive")
 }

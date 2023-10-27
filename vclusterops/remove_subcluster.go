@@ -41,13 +41,13 @@ func VRemoveScOptionsFactory() VRemoveScOptions {
 }
 
 func (o *VRemoveScOptions) setDefaultValues() {
-	o.DatabaseOptions.SetDefaultValues()
+	o.DatabaseOptions.setDefaultValues()
 	o.SubclusterToRemove = new(string)
 	o.ForceDelete = new(bool)
 }
 
-func (o *VRemoveScOptions) validateRequiredOptions() error {
-	err := o.ValidateBaseOptions("db_remove_subcluster")
+func (o *VRemoveScOptions) validateRequiredOptions(log vlog.Printer) error {
+	err := o.validateBaseOptions("db_remove_subcluster", log)
 	if err != nil {
 		return err
 	}
@@ -71,8 +71,8 @@ func (o *VRemoveScOptions) validatePathOptions() error {
 	return util.ValidateRequiredAbsPath(o.DepotPrefix, "depot path")
 }
 
-func (o *VRemoveScOptions) validateParseOptions() error {
-	err := o.validateRequiredOptions()
+func (o *VRemoveScOptions) validateParseOptions(log vlog.Printer) error {
+	err := o.validateRequiredOptions(log)
 	if err != nil {
 		return err
 	}
@@ -93,15 +93,15 @@ func (o *VRemoveScOptions) analyzeOptions() (err error) {
 	return nil
 }
 
-func (o *VRemoveScOptions) validateAnalyzeOptions() error {
-	if err := o.validateParseOptions(); err != nil {
+func (o *VRemoveScOptions) validateAnalyzeOptions(log vlog.Printer) error {
+	if err := o.validateParseOptions(log); err != nil {
 		return err
 	}
 	err := o.analyzeOptions()
 	if err != nil {
 		return err
 	}
-	return o.SetUsePassword()
+	return o.setUsePassword(log)
 }
 
 /*
@@ -111,19 +111,19 @@ VRemoveSubcluster has three major phases:
  3. run drop subcluster (i.e., remove the subcluster name from catalog)
 */
 func (vcc *VClusterCommands) VRemoveSubcluster(removeScOpt *VRemoveScOptions) (VCoordinationDatabase, error) {
-	vdb := MakeVCoordinationDatabase()
+	vdb := makeVCoordinationDatabase()
 
 	// VER-88594: read config file (may move this part to cmd_remove_subcluster)
 
 	// validate and analyze options
-	err := removeScOpt.validateAnalyzeOptions()
+	err := removeScOpt.validateAnalyzeOptions(vcc.Log)
 	if err != nil {
 		return vdb, err
 	}
 
 	// pre-check: should not remove the default subcluster
-	vlog.LogPrintInfoln("Performing db_remove_subcluster pre-checks")
-	hostsToRemove, err := removeScPreCheck(&vdb, removeScOpt)
+	vcc.Log.PrintInfo("Performing db_remove_subcluster pre-checks")
+	hostsToRemove, err := vcc.removeScPreCheck(&vdb, removeScOpt)
 	if err != nil {
 		return vdb, err
 	}
@@ -131,9 +131,9 @@ func (vcc *VClusterCommands) VRemoveSubcluster(removeScOpt *VRemoveScOptions) (V
 	// proceed to run db_remove_node only if
 	// the number of nodes to remove is greater than zero
 	var needRemoveNodes bool
-	vlog.LogPrintDebug("Nodes to be removed: %+v", hostsToRemove)
+	vcc.Log.V(1).Info("Nodes to be removed: %+v", hostsToRemove)
 	if len(hostsToRemove) == 0 {
-		vlog.LogPrintInfo("no node found in subcluster %s",
+		vcc.Log.PrintInfo("no node found in subcluster %s",
 			*removeScOpt.SubclusterToRemove)
 		needRemoveNodes = false
 	} else {
@@ -147,7 +147,7 @@ func (vcc *VClusterCommands) VRemoveSubcluster(removeScOpt *VRemoveScOptions) (V
 		removeNodeOpt.HostsToRemove = hostsToRemove
 		removeNodeOpt.ForceDelete = removeScOpt.ForceDelete
 
-		vlog.LogPrintInfo("Removing nodes %q from subcluster %s",
+		vcc.Log.PrintInfo("Removing nodes %q from subcluster %s",
 			hostsToRemove, *removeScOpt.SubclusterToRemove)
 		vdb, err = vcc.VRemoveNode(&removeNodeOpt)
 		if err != nil {
@@ -156,8 +156,8 @@ func (vcc *VClusterCommands) VRemoveSubcluster(removeScOpt *VRemoveScOptions) (V
 	}
 
 	// drop subcluster (i.e., remove the sc name from catalog)
-	vlog.LogPrintInfoln("Removing the subcluster name from catalog")
-	err = dropSubcluster(&vdb, removeScOpt)
+	vcc.Log.PrintInfo("Removing the subcluster name from catalog")
+	err = vcc.dropSubcluster(&vdb, removeScOpt)
 	if err != nil {
 		return vdb, err
 	}
@@ -180,12 +180,12 @@ func (e *RemoveDefaultSubclusterError) Error() string {
 // for a successful remove_node:
 //   - Get cluster and nodes info (check if the target DB is Eon and get to-be-removed node list)
 //   - Get the subcluster info (check if the target sc exists and if it is the default sc)
-func removeScPreCheck(vdb *VCoordinationDatabase, options *VRemoveScOptions) ([]string, error) {
+func (vcc *VClusterCommands) removeScPreCheck(vdb *VCoordinationDatabase, options *VRemoveScOptions) ([]string, error) {
 	var hostsToRemove []string
 	const preCheckErrMsg = "while performing db_remove_subcluster pre-checks"
 
 	// get cluster and nodes info
-	err := getVDBFromRunningDB(vdb, &options.DatabaseOptions)
+	err := vcc.getVDBFromRunningDB(vdb, &options.DatabaseOptions)
 	if err != nil {
 		return hostsToRemove, err
 	}
@@ -197,13 +197,13 @@ func removeScPreCheck(vdb *VCoordinationDatabase, options *VRemoveScOptions) ([]
 	}
 
 	// get default subcluster
-	httpsFindSubclusterOp, err := makeHTTPSFindSubclusterOp(options.Hosts,
+	httpsFindSubclusterOp, err := makeHTTPSFindSubclusterOp(vcc.Log, options.Hosts,
 		options.usePassword, *options.UserName, options.Password,
 		*options.SubclusterToRemove,
 		false /*do not ignore not found*/)
 	if err != nil {
-		vlog.LogPrintError("fail to get default subcluster %s, details: %v", preCheckErrMsg, err)
-		return hostsToRemove, err
+		return hostsToRemove, fmt.Errorf("fail to get default subcluster %s, details: %w",
+			preCheckErrMsg, err)
 	}
 
 	var instructions []ClusterOp
@@ -212,12 +212,12 @@ func removeScPreCheck(vdb *VCoordinationDatabase, options *VRemoveScOptions) ([]
 	)
 
 	certs := HTTPSCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := MakeClusterOpEngine(instructions, &certs)
-	err = clusterOpEngine.Run()
+	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+	err = clusterOpEngine.run(vcc.Log)
 	if err != nil {
 		// VER-88585 will improve this rfc error flow
 		if strings.Contains(err.Error(), "does not exist in the database") {
-			vlog.LogPrintError("fail to get subclusters' information %s, %v", preCheckErrMsg, err)
+			vcc.Log.PrintError("fail to get subclusters' information %s, %v", preCheckErrMsg, err)
 			rfcErr := rfc7807.New(rfc7807.SubclusterNotFound).WithHost(options.Hosts[0])
 			return hostsToRemove, rfcErr
 		}
@@ -239,7 +239,7 @@ func removeScPreCheck(vdb *VCoordinationDatabase, options *VRemoveScOptions) ([]
 	return hostsToRemove, nil
 }
 
-func dropSubcluster(vdb *VCoordinationDatabase, options *VRemoveScOptions) error {
+func (vcc *VClusterCommands) dropSubcluster(vdb *VCoordinationDatabase, options *VRemoveScOptions) error {
 	dropScErrMsg := fmt.Sprintf("fail to drop subcluster %s", *options.SubclusterToRemove)
 
 	// the initiator is a list of one primary up host
@@ -254,7 +254,7 @@ func dropSubcluster(vdb *VCoordinationDatabase, options *VRemoveScOptions) error
 		*options.SubclusterToRemove,
 		options.usePassword, *options.UserName, options.Password)
 	if err != nil {
-		vlog.LogPrintError("%s, details: %v", dropScErrMsg, err)
+		vcc.Log.Error(err, "details: %v", dropScErrMsg)
 		return err
 	}
 
@@ -262,10 +262,10 @@ func dropSubcluster(vdb *VCoordinationDatabase, options *VRemoveScOptions) error
 	instructions = append(instructions, &httpsDropScOp)
 
 	certs := HTTPSCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := MakeClusterOpEngine(instructions, &certs)
-	err = clusterOpEngine.Run()
+	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+	err = clusterOpEngine.run(vcc.Log)
 	if err != nil {
-		vlog.LogPrintError("%s, details: %v", dropScErrMsg, err)
+		vcc.Log.Error(err, "fail to drop subcluster, details: %v", dropScErrMsg)
 		return err
 	}
 

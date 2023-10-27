@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
+	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 type HTTPSCreateNodesDepotOp struct {
@@ -30,11 +31,12 @@ type HTTPSCreateNodesDepotOp struct {
 }
 
 // makeHTTPSCreateNodesDepotOp will make an op that call vertica-http service to create depot for the new nodes
-func makeHTTPSCreateNodesDepotOp(vdb *VCoordinationDatabase, nodes []string,
+func makeHTTPSCreateNodesDepotOp(log vlog.Printer, vdb *VCoordinationDatabase, nodes []string,
 	useHTTPPassword bool, userName string, httpsPassword *string,
 ) (HTTPSCreateNodesDepotOp, error) {
 	httpsCreateNodesDepotOp := HTTPSCreateNodesDepotOp{}
 	httpsCreateNodesDepotOp.name = "HTTPSCreateNodesDepotOp"
+	httpsCreateNodesDepotOp.log = log.WithName(httpsCreateNodesDepotOp.name)
 	httpsCreateNodesDepotOp.hosts = nodes
 	httpsCreateNodesDepotOp.useHTTPPassword = useHTTPPassword
 	httpsCreateNodesDepotOp.HostNodeMap = vdb.HostNodeMap
@@ -51,15 +53,11 @@ func makeHTTPSCreateNodesDepotOp(vdb *VCoordinationDatabase, nodes []string,
 }
 
 func (op *HTTPSCreateNodesDepotOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PostMethod
 		node := op.HostNodeMap[host]
-		httpRequest.BuildHTTPSEndpoint("nodes/" + node.Name + "/depot")
+		httpRequest.buildHTTPSEndpoint("nodes/" + node.Name + "/depot")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -75,7 +73,7 @@ func (op *HTTPSCreateNodesDepotOp) setupClusterHTTPRequest(hosts []string) error
 }
 
 func (op *HTTPSCreateNodesDepotOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }

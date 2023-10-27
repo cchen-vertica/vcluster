@@ -28,11 +28,12 @@ type HTTPSInstallPackagesOp struct {
 	OpHTTPSBase
 }
 
-func makeHTTPSInstallPackagesOp(hosts []string, useHTTPPassword bool,
+func makeHTTPSInstallPackagesOp(log vlog.Printer, hosts []string, useHTTPPassword bool,
 	userName string, httpsPassword *string,
 ) (HTTPSInstallPackagesOp, error) {
 	installPackagesOp := HTTPSInstallPackagesOp{}
 	installPackagesOp.name = "HTTPSInstallPackagesOp"
+	installPackagesOp.log = log.WithName(installPackagesOp.name)
 	installPackagesOp.hosts = hosts
 
 	err := util.ValidateUsernameAndPassword(installPackagesOp.name, useHTTPPassword, userName)
@@ -46,14 +47,10 @@ func makeHTTPSInstallPackagesOp(hosts []string, useHTTPPassword bool,
 }
 
 func (op *HTTPSInstallPackagesOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildHTTPSEndpoint("packages")
+		httpRequest.buildHTTPSEndpoint("packages")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -65,7 +62,7 @@ func (op *HTTPSInstallPackagesOp) setupClusterHTTPRequest(hosts []string) error 
 }
 
 func (op *HTTPSInstallPackagesOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
@@ -126,7 +123,7 @@ func (op *HTTPSInstallPackagesOp) processResult(_ *OpEngineExecContext) error {
 			allErrs = errors.Join(allErrs, err)
 		}
 
-		vlog.LogPrintInfo("[%s] installed packages: %v", op.name, installedPackages)
+		op.log.PrintInfo("[%s] installed packages: %v", op.name, installedPackages)
 	}
 	return allErrs
 }

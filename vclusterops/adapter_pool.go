@@ -16,13 +16,16 @@
 package vclusterops
 
 import (
+	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 type AdapterPool struct {
+	log vlog.Printer
 	// map from host to HTTPAdapter
 	connections map[string]Adapter
 }
@@ -33,22 +36,23 @@ var (
 )
 
 // return a singleton instance of the AdapterPool
-func getPoolInstance() AdapterPool {
+func getPoolInstance(log vlog.Printer) AdapterPool {
 	/* if once.Do(f) is called multiple times,
 	 * only the first call will invoke f,
 	 * even if f has a different value in each invocation.
 	 * Reference: https://pkg.go.dev/sync#Once
 	 */
 	once.Do(func() {
-		poolInstance = makeAdapterPool()
+		poolInstance = makeAdapterPool(log)
 	})
 
 	return poolInstance
 }
 
-func makeAdapterPool() AdapterPool {
+func makeAdapterPool(log vlog.Printer) AdapterPool {
 	newAdapterPool := AdapterPool{}
 	newAdapterPool.connections = make(map[string]Adapter)
+	newAdapterPool.log = log.WithName("AdapterPool")
 	return newAdapterPool
 }
 
@@ -58,7 +62,6 @@ type adapterToRequest struct {
 }
 
 func (pool *AdapterPool) sendRequest(clusterHTTPRequest *ClusterHTTPRequest) error {
-	vlog.LogInfoln("Adapter pool's sendRequest is called")
 	// build a collection of adapter to request
 	// we need this step as a host may not be in the pool
 	// in that case, we should not proceed
@@ -77,6 +80,14 @@ func (pool *AdapterPool) sendRequest(clusterHTTPRequest *ClusterHTTPRequest) err
 
 	// result channel to collect result from each host
 	resultChannel := make(chan HostHTTPResult, hostCount)
+
+	// use context to check whether a step has completed
+	if pool.log.ForCli {
+		ctx, cancel := context.WithCancel(context.Background())
+		go progressCheck(ctx, clusterHTTPRequest.Name, pool.log)
+		// cancel the progress check context when the result channel is closed
+		defer cancel()
+	}
 
 	for i := 0; i < len(adapterToRequestCollection); i++ {
 		ar := adapterToRequestCollection[i]
@@ -99,4 +110,28 @@ func (pool *AdapterPool) sendRequest(clusterHTTPRequest *ClusterHTTPRequest) err
 	close(resultChannel)
 
 	return nil
+}
+
+// progressCheck checks whether a step (operation) has been completed.
+// Elapsed time of the step in seconds will be displayed.
+func progressCheck(ctx context.Context, name string, log vlog.Printer) {
+	const progressCheckInterval = 5
+	startTime := time.Now()
+
+	ticker := time.NewTicker(progressCheckInterval * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			// context is canceled
+			// - when the requests to each host are completed, or
+			// - when the timeout is reached
+			return
+		case tickTime := <-ticker.C:
+			elapsedTime := tickTime.Sub(startTime)
+			log.PrintInfo("[%s] is still running. %.f seconds spent at this step.",
+				name, elapsedTime.Seconds())
+		}
+	}
 }

@@ -17,6 +17,8 @@ package vclusterops
 
 import (
 	"fmt"
+
+	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 type VClusterOpEngine struct {
@@ -25,7 +27,7 @@ type VClusterOpEngine struct {
 	execContext  *OpEngineExecContext
 }
 
-func MakeClusterOpEngine(instructions []ClusterOp, certs *HTTPSCerts) VClusterOpEngine {
+func makeClusterOpEngine(instructions []ClusterOp, certs *HTTPSCerts) VClusterOpEngine {
 	newClusterOpEngine := VClusterOpEngine{}
 	newClusterOpEngine.instructions = instructions
 	newClusterOpEngine.certs = certs
@@ -36,13 +38,14 @@ func (opEngine *VClusterOpEngine) shouldGetCertsFromOptions() bool {
 	return (opEngine.certs.key != "" && opEngine.certs.cert != "" && opEngine.certs.caCert != "")
 }
 
-func (opEngine *VClusterOpEngine) Run() error {
-	execContext := MakeOpEngineExecContext()
+func (opEngine *VClusterOpEngine) run(log vlog.Printer) error {
+	execContext := makeOpEngineExecContext(log)
 	opEngine.execContext = &execContext
 
 	findCertsInOptions := opEngine.shouldGetCertsFromOptions()
 
 	for _, op := range opEngine.instructions {
+		op.setupBasicInfo()
 		op.logPrepare()
 		err := op.prepare(&execContext)
 		if err != nil {

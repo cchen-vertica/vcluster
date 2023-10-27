@@ -83,10 +83,11 @@ func (e *ReviveDBNodeCountMismatchError) Error() string {
 		e.ReviveDBStep, e.FailureHost, e.NumOfNewNodes, e.NumOfOldNodes)
 }
 
-func makeNMADownloadFileOp(newNodes []string, sourceFilePath, destinationFilePath, catalogPath string,
-	communalStorageParameters map[string]string, vdb *VCoordinationDatabase) (NMADownloadFileOp, error) {
+func makeNMADownloadFileOp(log vlog.Printer, newNodes []string, sourceFilePath, destinationFilePath, catalogPath string,
+	configurationParameters map[string]string, vdb *VCoordinationDatabase) (NMADownloadFileOp, error) {
 	op := NMADownloadFileOp{}
 	op.name = "NMADownloadFileOp"
+	op.log = log.WithName(op.name)
 	initiator := getInitiator(newNodes)
 	op.hosts = []string{initiator}
 	op.vdb = vdb
@@ -99,7 +100,7 @@ func makeNMADownloadFileOp(newNodes []string, sourceFilePath, destinationFilePat
 		requestData.SourceFilePath = sourceFilePath
 		requestData.DestinationFilePath = destinationFilePath
 		requestData.CatalogPath = catalogPath
-		requestData.Parameters = communalStorageParameters
+		requestData.Parameters = configurationParameters
 
 		dataBytes, err := json.Marshal(requestData)
 		if err != nil {
@@ -112,10 +113,10 @@ func makeNMADownloadFileOp(newNodes []string, sourceFilePath, destinationFilePat
 	return op, nil
 }
 
-func makeNMADownloadFileOpForRevive(newNodes []string, sourceFilePath, destinationFilePath, catalogPath string,
-	communalStorageParameters map[string]string, vdb *VCoordinationDatabase, displayOnly, ignoreClusterLease bool) (NMADownloadFileOp, error) {
-	op, err := makeNMADownloadFileOp(newNodes, sourceFilePath, destinationFilePath,
-		catalogPath, communalStorageParameters, vdb)
+func makeNMADownloadFileOpForRevive(log vlog.Printer, newNodes []string, sourceFilePath, destinationFilePath, catalogPath string,
+	configurationParameters map[string]string, vdb *VCoordinationDatabase, displayOnly, ignoreClusterLease bool) (NMADownloadFileOp, error) {
+	op, err := makeNMADownloadFileOp(log, newNodes, sourceFilePath, destinationFilePath,
+		catalogPath, configurationParameters, vdb)
 	if err != nil {
 		return op, err
 	}
@@ -127,14 +128,10 @@ func makeNMADownloadFileOpForRevive(newNodes []string, sourceFilePath, destinati
 }
 
 func (op *NMADownloadFileOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildNMAEndpoint("vertica/download-file")
+		httpRequest.buildNMAEndpoint("vertica/download-file")
 		httpRequest.RequestData = op.hostRequestBodyMap[host]
 
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
@@ -144,7 +141,7 @@ func (op *NMADownloadFileOp) setupClusterHTTPRequest(hosts []string) error {
 }
 
 func (op *NMADownloadFileOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
@@ -197,7 +194,7 @@ func (op *NMADownloadFileOp) processResult(execContext *OpEngineExecContext) err
 			result := strings.TrimSpace(response.Result)
 			if result != respSuccResult {
 				err = fmt.Errorf(`[%s] fail to download file on host %s, error result in the response is %s`, op.name, host, result)
-				vlog.LogError(err.Error())
+				op.log.Error(err, "fail to download file, detail")
 				allErrs = errors.Join(allErrs, err)
 				break
 			}
@@ -236,8 +233,7 @@ func (op *NMADownloadFileOp) processResult(execContext *OpEngineExecContext) err
 			}
 
 			// save descFileContent in vdb
-			op.buildVDBFromClusterConfig(descFileContent)
-			return nil
+			return op.buildVDBFromClusterConfig(descFileContent)
 		}
 
 		httpsErr := errors.Join(fmt.Errorf("[%s] HTTPS call failed on host %s", op.name, host), result.err)
@@ -248,11 +244,10 @@ func (op *NMADownloadFileOp) processResult(execContext *OpEngineExecContext) err
 }
 
 // buildVDBFromClusterConfig can build a vdb using cluster_config.json
-func (op *NMADownloadFileOp) buildVDBFromClusterConfig(descFileContent fileContent) {
+func (op *NMADownloadFileOp) buildVDBFromClusterConfig(descFileContent fileContent) error {
 	op.vdb.HostNodeMap = makeVHostNodeMap()
 	for _, node := range descFileContent.NodeList {
-		op.vdb.HostList = append(op.vdb.HostList, node.Address)
-		vNode := MakeVCoordinationNode()
+		vNode := makeVCoordinationNode()
 		vNode.Name = node.Name
 		vNode.Address = node.Address
 		vNode.IsPrimary = node.IsPrimary
@@ -283,13 +278,18 @@ func (op *NMADownloadFileOp) buildVDBFromClusterConfig(descFileContent fileConte
 			}
 		}
 
-		op.vdb.HostNodeMap[node.Address] = &vNode
+		err := op.vdb.addNode(&vNode)
+		if err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
 func (op *NMADownloadFileOp) clusterLeaseCheck(clusterLeaseExpiration string) error {
 	if op.ignoreClusterLease {
-		vlog.LogPrintWarningln("Skipping cluster lease check")
+		op.log.PrintWarning("Skipping cluster lease check\n")
 		return nil
 	}
 
@@ -305,6 +305,6 @@ func (op *NMADownloadFileOp) clusterLeaseCheck(clusterLeaseExpiration string) er
 		return &ClusterLeaseNotExpiredError{Expiration: clusterLeaseExpiration}
 	}
 
-	vlog.LogPrintInfoln("Cluster lease check has passed. We proceed to revive the database")
+	op.log.PrintInfo("Cluster lease check has passed. We proceed to revive the database")
 	return nil
 }

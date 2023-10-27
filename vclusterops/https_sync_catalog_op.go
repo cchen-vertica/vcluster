@@ -29,10 +29,11 @@ type HTTPSSyncCatalogOp struct {
 	OpHTTPSBase
 }
 
-func makeHTTPSSyncCatalogOp(hosts []string, useHTTPPassword bool,
+func makeHTTPSSyncCatalogOp(log vlog.Printer, hosts []string, useHTTPPassword bool,
 	userName string, httpsPassword *string) (HTTPSSyncCatalogOp, error) {
 	op := HTTPSSyncCatalogOp{}
 	op.name = "HTTPSSyncCatalogOp"
+	op.log = log.WithName(op.name)
 	op.hosts = hosts
 	op.useHTTPPassword = useHTTPPassword
 
@@ -46,20 +47,16 @@ func makeHTTPSSyncCatalogOp(hosts []string, useHTTPPassword bool,
 	return op, nil
 }
 
-func makeHTTPSSyncCatalogOpWithoutHosts(useHTTPPassword bool,
+func makeHTTPSSyncCatalogOpWithoutHosts(log vlog.Printer, useHTTPPassword bool,
 	userName string, httpsPassword *string) (HTTPSSyncCatalogOp, error) {
-	return makeHTTPSSyncCatalogOp(nil, useHTTPPassword, userName, httpsPassword)
+	return makeHTTPSSyncCatalogOp(log, nil, useHTTPPassword, userName, httpsPassword)
 }
 
 func (op *HTTPSSyncCatalogOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildHTTPSEndpoint("cluster/catalog/sync")
+		httpRequest.buildHTTPSEndpoint("cluster/catalog/sync")
 		httpRequest.QueryParams = make(map[string]string)
 		httpRequest.QueryParams["retry-count"] = strconv.Itoa(util.DefaultRetryCount)
 		if op.useHTTPPassword {
@@ -81,7 +78,7 @@ func (op *HTTPSSyncCatalogOp) prepare(execContext *OpEngineExecContext) error {
 		// use first up host to execute https post request
 		op.hosts = []string{execContext.upHosts[0]}
 	}
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
@@ -114,7 +111,7 @@ func (op *HTTPSSyncCatalogOp) processResult(_ *OpEngineExecContext) error {
 				err = fmt.Errorf(`[%s] response does not contain field "new_truncation_version"`, op.name)
 				allErrs = errors.Join(allErrs, err)
 			}
-			vlog.LogPrintInfo(`[%s] the_latest_truncation_catalog_version: %s"`, op.name, version)
+			op.log.PrintInfo(`[%s] the_latest_truncation_catalog_version: %s"`, op.name, version)
 		} else {
 			allErrs = errors.Join(allErrs, result.err)
 		}

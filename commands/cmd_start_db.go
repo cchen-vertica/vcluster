@@ -18,12 +18,12 @@ type CmdStartDB struct {
 	CmdBase
 	startDBOptions *vclusterops.VStartDatabaseOptions
 
-	Force                 *bool   // force cleanup to start the database
-	AllowFallbackKeygen   *bool   // Generate spread encryption key from Vertica. Use under support guidance only
-	IgnoreClusterLease    *bool   // ignore the cluster lease in communal storage
-	Unsafe                *bool   // Start database unsafely, skipping recovery.
-	Fast                  *bool   // Attempt fast startup database
-	communalStorageParams *string // raw input from user, need further processing
+	Force               *bool   // force cleanup to start the database
+	AllowFallbackKeygen *bool   // Generate spread encryption key from Vertica. Use under support guidance only
+	IgnoreClusterLease  *bool   // ignore the cluster lease in communal storage
+	Unsafe              *bool   // Start database unsafely, skipping recovery.
+	Fast                *bool   // Attempt fast startup database
+	configurationParams *string // raw input from user, need further processing
 }
 
 func makeCmdStartDB() *CmdStartDB {
@@ -57,8 +57,8 @@ func makeCmdStartDB() *CmdStartDB {
 		" Use it when you do not trust "+vclusterops.ConfigFileName))
 	startDBOptions.CommunalStorageLocation = newCmd.parser.String("communal-storage-location", "",
 		util.GetEonFlagMsg("Location of communal storage"))
-	newCmd.communalStorageParams = newCmd.parser.String("communal-storage-params", "", util.GetOptionalFlagMsg(
-		"Comma-separated list of NAME=VALUE pairs for communal storage parameters"))
+	newCmd.configurationParams = newCmd.parser.String("config-param", "", util.GetOptionalFlagMsg(
+		"Comma-separated list of NAME=VALUE pairs for configuration parameters"))
 
 	// hidden options
 	// TODO: the following options will be processed later
@@ -79,13 +79,13 @@ func (c *CmdStartDB) CommandType() string {
 	return "start_db"
 }
 
-func (c *CmdStartDB) Parse(inputArgv []string) error {
+func (c *CmdStartDB) Parse(inputArgv []string, log vlog.Printer) error {
 	if c.parser == nil {
 		return fmt.Errorf("unexpected nil - the parser was nil")
 	}
 
 	c.argv = inputArgv
-	err := c.ValidateParseArgv(c.CommandType())
+	err := c.ValidateParseArgv(c.CommandType(), log)
 	if err != nil {
 		return err
 	}
@@ -105,41 +105,49 @@ func (c *CmdStartDB) Parse(inputArgv []string) error {
 		c.startDBOptions.ConfigDirectory = nil
 	}
 
-	return c.validateParse()
+	return c.validateParse(log)
 }
 
-func (c *CmdStartDB) validateParse() error {
-	vlog.LogInfo("[%s] Called validateParse()", c.CommandType())
+func (c *CmdStartDB) validateParse(log vlog.Printer) error {
+	log.Info("Called validateParse()", "command", c.CommandType())
 
-	// check the format of communal storage params string, and parse it into configParams
-	communalStorageParams, err := util.ParseConfigParams(*c.communalStorageParams)
+	// check the format of configuration params string, and parse it into configParams
+	configurationParams, err := util.ParseConfigParams(*c.configurationParams)
 	if err != nil {
 		return err
 	}
-	if communalStorageParams != nil {
-		c.startDBOptions.CommunalStorageParameters = communalStorageParams
+	if configurationParams != nil {
+		c.startDBOptions.ConfigurationParameters = configurationParams
 	}
 
 	return c.ValidateParseBaseOptions(&c.startDBOptions.DatabaseOptions)
 }
 
-func (c *CmdStartDB) Analyze() error {
+func (c *CmdStartDB) Analyze(log vlog.Printer) error {
 	// Analyze() is needed to fulfill an interface
-	vlog.LogInfoln("Called method Analyze()")
+	log.Info("Called method Analyze()")
 	return nil
 }
 
-func (c *CmdStartDB) Run(log vlog.Printer) error {
-	vcc := vclusterops.VClusterCommands{
-		Log: log.WithName(c.CommandType()),
-	}
+func (c *CmdStartDB) Run(vcc vclusterops.VClusterCommands) error {
 	vcc.Log.V(1).Info("Called method Run()")
-	err := vcc.VStartDatabase(c.startDBOptions)
+
+	options := c.startDBOptions
+
+	// load vdb info from the YAML config file
+	// get config from vertica_cluster.yaml
+	config, err := options.GetDBConfig(vcc)
+	if err != nil {
+		return err
+	}
+	options.Config = config
+
+	err = vcc.VStartDatabase(options)
 	if err != nil {
 		vcc.Log.Error(err, "failed to start the database")
 		return err
 	}
 
-	vlog.LogPrintInfo("Successfully start the database %s\n", *c.startDBOptions.DBName)
+	vcc.Log.PrintInfo("Successfully start the database %s\n", *options.DBName)
 	return nil
 }

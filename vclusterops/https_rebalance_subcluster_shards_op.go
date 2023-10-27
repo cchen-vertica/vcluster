@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
+	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 const HTTPSSuccMsg = "REBALANCED SHARDS"
@@ -31,10 +32,11 @@ type HTTPSRebalanceSubclusterShardsOp struct {
 }
 
 // makeHTTPSRebalanceSubclusterShardsOp creates an op that calls vertica-http service to rebalance shards of a subcluster
-func makeHTTPSRebalanceSubclusterShardsOp(bootstrapHost []string, useHTTPPassword bool, userName string,
+func makeHTTPSRebalanceSubclusterShardsOp(log vlog.Printer, bootstrapHost []string, useHTTPPassword bool, userName string,
 	httpsPassword *string, scName string) (HTTPSRebalanceSubclusterShardsOp, error) {
 	httpsRBSCShardsOp := HTTPSRebalanceSubclusterShardsOp{}
 	httpsRBSCShardsOp.name = "HTTPSRebalanceSubclusterShardsOp"
+	httpsRBSCShardsOp.log = log.WithName(httpsRBSCShardsOp.name)
 	httpsRBSCShardsOp.hosts = bootstrapHost
 	httpsRBSCShardsOp.scName = scName
 
@@ -51,14 +53,10 @@ func makeHTTPSRebalanceSubclusterShardsOp(bootstrapHost []string, useHTTPPasswor
 }
 
 func (op *HTTPSRebalanceSubclusterShardsOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildHTTPSEndpoint("subclusters/" + op.scName + "/rebalance")
+		httpRequest.buildHTTPSEndpoint("subclusters/" + op.scName + "/rebalance")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -78,7 +76,7 @@ func (op *HTTPSRebalanceSubclusterShardsOp) prepare(execContext *OpEngineExecCon
 		op.scName = execContext.defaultSCName
 	}
 
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
@@ -97,7 +95,7 @@ func (op *HTTPSRebalanceSubclusterShardsOp) processResult(_ *OpEngineExecContext
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
-		if result.IsUnauthorizedRequest() {
+		if result.isUnauthorizedRequest() {
 			// skip checking response from other nodes because we will get the same error there
 			return result.err
 		}

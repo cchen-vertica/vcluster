@@ -36,22 +36,29 @@ type VAddNodeOptions struct {
 	DepotSize *string // like 10G
 	// Skip rebalance shards if true
 	SkipRebalanceShards *bool
+	// Use force remove if true
+	ForceRemoval *bool
+
+	// Names of the existing nodes in the cluster.
+	// This options can be used to remove partially added nodes from catalog.
+	ExpectedNodeNames []string
 }
 
 func VAddNodeOptionsFactory() VAddNodeOptions {
 	opt := VAddNodeOptions{}
 	// set default values to the params
-	opt.SetDefaultValues()
+	opt.setDefaultValues()
 
 	return opt
 }
 
-func (o *VAddNodeOptions) SetDefaultValues() {
-	o.DatabaseOptions.SetDefaultValues()
+func (o *VAddNodeOptions) setDefaultValues() {
+	o.DatabaseOptions.setDefaultValues()
 
 	o.SCName = new(string)
 	o.SkipRebalanceShards = new(bool)
 	o.DepotSize = new(string)
+	o.ForceRemoval = new(bool)
 }
 
 func (o *VAddNodeOptions) validateEonOptions() error {
@@ -72,9 +79,9 @@ func (o *VAddNodeOptions) validateExtraOptions() error {
 	return util.ValidateRequiredAbsPath(o.DataPrefix, "data path")
 }
 
-func (o *VAddNodeOptions) validateParseOptions() error {
+func (o *VAddNodeOptions) validateParseOptions(log vlog.Printer) error {
 	// batch 1: validate required parameters
-	err := o.ValidateBaseOptions("db_add_node")
+	err := o.validateBaseOptions("db_add_node", log)
 	if err != nil {
 		return err
 	}
@@ -103,8 +110,8 @@ func (o *VAddNodeOptions) analyzeOptions() (err error) {
 	return nil
 }
 
-func (o *VAddNodeOptions) validateAnalyzeOptions() error {
-	err := o.validateParseOptions()
+func (o *VAddNodeOptions) validateAnalyzeOptions(log vlog.Printer) error {
+	err := o.validateParseOptions(log)
 	if err != nil {
 		return err
 	}
@@ -114,30 +121,28 @@ func (o *VAddNodeOptions) validateAnalyzeOptions() error {
 
 // VAddNode is the top-level API for adding node(s) to an existing database.
 func (vcc *VClusterCommands) VAddNode(options *VAddNodeOptions) (VCoordinationDatabase, error) {
-	vdb := MakeVCoordinationDatabase()
+	vdb := makeVCoordinationDatabase()
 
-	// get config from vertica_cluster.yaml
-	config, err := options.GetDBConfig()
-	if err != nil {
-		return vdb, err
-	}
-
-	err = options.validateAnalyzeOptions()
+	err := options.validateAnalyzeOptions(vcc.Log)
 	if err != nil {
 		return vdb, err
 	}
 
 	// get hosts from config file and options.
-	// this, as well as all the config file related parts,
-	// will be moved to cmd_add_node.go after VER-88442,
-	// as the operator does not support config file.
-	hosts := options.GetHosts(config)
+	hosts, err := options.getHosts(options.Config)
+	if err != nil {
+		return vdb, err
+	}
+
 	options.Hosts = hosts
 	// get depot and data prefix from config file or options.
 	// after VER-88122, we will able to get them from an https endpoint.
-	*options.DepotPrefix, *options.DataPrefix = options.getDepotAndDataPrefix(config)
+	*options.DepotPrefix, *options.DataPrefix, err = options.getDepotAndDataPrefix(options.Config)
+	if err != nil {
+		return vdb, err
+	}
 
-	err = getVDBFromRunningDB(&vdb, &options.DatabaseOptions)
+	err = vcc.getVDBFromRunningDB(&vdb, &options.DatabaseOptions)
 	if err != nil {
 		return vdb, err
 	}
@@ -155,13 +160,21 @@ func (vcc *VClusterCommands) VAddNode(options *VAddNodeOptions) (VCoordinationDa
 		}
 	}
 
-	// add_node is aborted if requirements are not met
-	err = checkAddNodeRequirements(&vdb, options.NewHosts)
+	err = options.setInitiator(vdb.PrimaryUpNodes)
 	if err != nil {
 		return vdb, err
 	}
 
-	err = options.setInitiator(vdb.PrimaryUpNodes)
+	// trim stale node information from catalog
+	// if NodeNames is provided
+	err = vcc.trimNodesInCatalog(&vdb, options)
+	if err != nil {
+		return vdb, err
+	}
+
+	// add_node is aborted if requirements are not met.
+	// Here we check whether the nodes being added already exist
+	err = checkAddNodeRequirements(&vdb, options.NewHosts)
 	if err != nil {
 		return vdb, err
 	}
@@ -173,15 +186,13 @@ func (vcc *VClusterCommands) VAddNode(options *VAddNodeOptions) (VCoordinationDa
 
 	instructions, err := vcc.produceAddNodeInstructions(&vdb, options)
 	if err != nil {
-		vlog.LogPrintError("fail to produce add node instructions, %s", err)
-		return vdb, err
+		return vdb, fmt.Errorf("fail to produce add node instructions, %w", err)
 	}
 
 	certs := HTTPSCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := MakeClusterOpEngine(instructions, &certs)
-	if runError := clusterOpEngine.Run(); runError != nil {
-		vlog.LogPrintError("fail to complete add node operation, %s", runError)
-		return vdb, runError
+	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+	if runError := clusterOpEngine.run(vcc.Log); runError != nil {
+		return vdb, fmt.Errorf("fail to complete add node operation, %w", runError)
 	}
 	return vdb, nil
 }
@@ -219,6 +230,89 @@ func (o *VAddNodeOptions) completeVDBSetting(vdb *VCoordinationDatabase) error {
 	return nil
 }
 
+// trimNodesInCatalog removes failed node info from catalog
+// which can be used to remove partially added nodes
+func (vcc *VClusterCommands) trimNodesInCatalog(vdb *VCoordinationDatabase,
+	options *VAddNodeOptions) error {
+	if len(options.ExpectedNodeNames) == 0 {
+		vcc.Log.Info("ExpectedNodeNames is not set, skip trimming nodes", "ExpectedNodeNames", options.ExpectedNodeNames)
+		return nil
+	}
+
+	// find out nodes to be trimmed
+	// trimmed nodes are the ones in catalog but not expected
+	expectedNodeNames := make(map[string]any)
+	for _, nodeName := range options.ExpectedNodeNames {
+		expectedNodeNames[nodeName] = struct{}{}
+	}
+
+	var aliveHosts []string
+	var nodesToTrim []string
+	nodeNamesInCatalog := make(map[string]any)
+	for h, vnode := range vdb.HostNodeMap {
+		nodeNamesInCatalog[vnode.Name] = struct{}{}
+		if _, ok := expectedNodeNames[vnode.Name]; ok { // catalog node is expected
+			aliveHosts = append(aliveHosts, h)
+		} else { // catalog node is not expected, trim it
+			// cannot trim UP nodes
+			if vnode.State == util.NodeUpState {
+				return fmt.Errorf("cannot trim the UP node %s (address %s)",
+					vnode.Name, h)
+			}
+			nodesToTrim = append(nodesToTrim, vnode.Name)
+		}
+	}
+
+	// sanity check: all provided node names should be found in catalog
+	invalidNodeNames := util.MapKeyDiff(expectedNodeNames, nodeNamesInCatalog)
+	if len(invalidNodeNames) > 0 {
+		return fmt.Errorf("node names %v are not found in database %s",
+			invalidNodeNames, vdb.Name)
+	}
+
+	vcc.Log.PrintInfo("Trim nodes %+v from catalog", nodesToTrim)
+
+	// pick any up host as intiator
+	initiator := aliveHosts[:1]
+
+	var instructions []ClusterOp
+
+	// mark k-safety
+	if len(aliveHosts) < ksafetyThreshold {
+		httpsMarkDesignKSafeOp, err := makeHTTPSMarkDesignKSafeOp(vcc.Log, initiator,
+			options.usePassword, *options.UserName, options.Password,
+			ksafeValueZero)
+		if err != nil {
+			return err
+		}
+		instructions = append(instructions, &httpsMarkDesignKSafeOp)
+	}
+
+	// remove down nodes from catalog
+	for _, nodeName := range nodesToTrim {
+		httpsDropNodeOp, err := makeHTTPSDropNodeOp(vcc.Log, nodeName, initiator,
+			options.usePassword, *options.UserName, options.Password, vdb.IsEon)
+		if err != nil {
+			return err
+		}
+		instructions = append(instructions, &httpsDropNodeOp)
+	}
+
+	certs := HTTPSCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
+	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+	err := clusterOpEngine.run(vcc.Log)
+	if err != nil {
+		vcc.Log.Error(err, "fail to trim nodes from catalog, %v")
+		return err
+	}
+
+	// update vdb info
+	vdb.HostNodeMap = util.FilterMapByKey(vdb.HostNodeMap, aliveHosts)
+	vdb.HostList = aliveHosts
+
+	return nil
+}
+
 // produceAddNodeInstructions will build a list of instructions to execute for
 // the add node operation.
 //
@@ -248,7 +342,7 @@ func (vcc *VClusterCommands) produceAddNodeInstructions(vdb *VCoordinationDataba
 	usePassword := options.usePassword
 	password := options.Password
 
-	nmaHealthOp := makeNMAHealthOp(vdb.HostList)
+	nmaHealthOp := makeNMAHealthOp(vcc.Log, vdb.HostList)
 	// require to have the same vertica version
 	nmaVerticaVersionOp := makeNMAVerticaVersionOp(vcc.Log, vdb.HostList, true)
 	instructions = append(instructions,
@@ -257,7 +351,7 @@ func (vcc *VClusterCommands) produceAddNodeInstructions(vdb *VCoordinationDataba
 
 	if vdb.IsEon {
 		httpsFindSubclusterOp, e := makeHTTPSFindSubclusterOp(
-			allHosts, usePassword, username, password, *options.SCName,
+			vcc.Log, allHosts, usePassword, username, password, *options.SCName,
 			true /*ignore not found*/)
 		if e != nil {
 			return instructions, e
@@ -268,22 +362,22 @@ func (vcc *VClusterCommands) produceAddNodeInstructions(vdb *VCoordinationDataba
 	// this is a copy of the original HostNodeMap that only
 	// contains the hosts to add.
 	newHostNodeMap := vdb.copyHostNodeMap(options.NewHosts)
-	nmaPrepareDirectoriesOp, err := makeNMAPrepareDirectoriesOp(newHostNodeMap,
-		false /*force cleanup*/, false /*for db revive*/)
+	nmaPrepareDirectoriesOp, err := makeNMAPrepareDirectoriesOp(vcc.Log, newHostNodeMap,
+		*options.ForceRemoval /*force cleanup*/, false /*for db revive*/)
 	if err != nil {
 		return instructions, err
 	}
-	nmaNetworkProfileOp := makeNMANetworkProfileOp(vdb.HostList)
-	httpsCreateNodeOp, err := makeHTTPSCreateNodeOp(newHosts, initiatorHost,
+	nmaNetworkProfileOp := makeNMANetworkProfileOp(vcc.Log, vdb.HostList)
+	httpsCreateNodeOp, err := makeHTTPSCreateNodeOp(vcc.Log, newHosts, initiatorHost,
 		usePassword, username, password, vdb, *options.SCName)
 	if err != nil {
 		return instructions, err
 	}
-	httpsReloadSpreadOp, err := makeHTTPSReloadSpreadOpWithInitiator(initiatorHost, usePassword, username, password)
+	httpsReloadSpreadOp, err := makeHTTPSReloadSpreadOpWithInitiator(vcc.Log, initiatorHost, usePassword, username, password)
 	if err != nil {
 		return instructions, err
 	}
-	httpsRestartUpCommandOp, err := makeHTTPSStartUpCommandOp(usePassword, username, password, vdb)
+	httpsRestartUpCommandOp, err := makeHTTPSStartUpCommandOp(vcc.Log, usePassword, username, password, vdb)
 	if err != nil {
 		return instructions, err
 	}
@@ -296,13 +390,13 @@ func (vcc *VClusterCommands) produceAddNodeInstructions(vdb *VCoordinationDataba
 	)
 
 	// we will remove the nil parameters in VER-88401 by adding them in execContext
-	produceTransferConfigOps(&instructions,
+	produceTransferConfigOps(vcc.Log, &instructions,
 		nil,
 		vdb.HostList,
 		vdb /*db configurations retrieved from a running db*/)
 
-	nmaStartNewNodesOp := makeNMAStartNodeOpWithVDB(newHosts, vdb)
-	httpsPollNodeStateOp, err := makeHTTPSPollNodeStateOp(newHosts, usePassword, username, password)
+	nmaStartNewNodesOp := makeNMAStartNodeOpWithVDB(vcc.Log, newHosts, vdb)
+	httpsPollNodeStateOp, err := makeHTTPSPollNodeStateOp(vcc.Log, newHosts, usePassword, username, password)
 	if err != nil {
 		return instructions, err
 	}
@@ -311,17 +405,17 @@ func (vcc *VClusterCommands) produceAddNodeInstructions(vdb *VCoordinationDataba
 		&httpsPollNodeStateOp,
 	)
 
-	return prepareAdditionalEonInstructions(vdb, options, instructions,
+	return vcc.prepareAdditionalEonInstructions(vdb, options, instructions,
 		username, usePassword, initiatorHost, newHosts)
 }
 
-func prepareAdditionalEonInstructions(vdb *VCoordinationDatabase,
+func (vcc *VClusterCommands) prepareAdditionalEonInstructions(vdb *VCoordinationDatabase,
 	options *VAddNodeOptions,
 	instructions []ClusterOp,
 	username string, usePassword bool,
 	initiatorHost, newHosts []string) ([]ClusterOp, error) {
 	if vdb.UseDepot {
-		httpsCreateNodesDepotOp, err := makeHTTPSCreateNodesDepotOp(vdb,
+		httpsCreateNodesDepotOp, err := makeHTTPSCreateNodesDepotOp(vcc.Log, vdb,
 			newHosts, usePassword, username, options.Password)
 		if err != nil {
 			return instructions, err
@@ -330,14 +424,14 @@ func prepareAdditionalEonInstructions(vdb *VCoordinationDatabase,
 	}
 
 	if vdb.IsEon {
-		httpsSyncCatalogOp, err := makeHTTPSSyncCatalogOp(initiatorHost, true, username, options.Password)
+		httpsSyncCatalogOp, err := makeHTTPSSyncCatalogOp(vcc.Log, initiatorHost, true, username, options.Password)
 		if err != nil {
 			return instructions, err
 		}
 		instructions = append(instructions, &httpsSyncCatalogOp)
 		if !*options.SkipRebalanceShards {
 			httpsRBSCShardsOp, err := makeHTTPSRebalanceSubclusterShardsOp(
-				initiatorHost, usePassword, username, options.Password, *options.SCName)
+				vcc.Log, initiatorHost, usePassword, username, options.Password, *options.SCName)
 			if err != nil {
 				return instructions, err
 			}

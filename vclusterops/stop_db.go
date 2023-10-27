@@ -16,6 +16,8 @@
 package vclusterops
 
 import (
+	"fmt"
+
 	"github.com/vertica/vcluster/vclusterops/util"
 	"github.com/vertica/vcluster/vclusterops/vlog"
 )
@@ -42,20 +44,20 @@ type VStopDatabaseInfo struct {
 func VStopDatabaseOptionsFactory() VStopDatabaseOptions {
 	opt := VStopDatabaseOptions{}
 	// set default values to the params
-	opt.SetDefaultValues()
+	opt.setDefaultValues()
 
 	return opt
 }
 
-func (options *VStopDatabaseOptions) SetDefaultValues() {
-	options.DatabaseOptions.SetDefaultValues()
+func (options *VStopDatabaseOptions) setDefaultValues() {
+	options.DatabaseOptions.setDefaultValues()
 
 	options.CheckUserConn = new(bool)
 	options.ForceKill = new(bool)
 }
 
-func (options *VStopDatabaseOptions) validateRequiredOptions() error {
-	err := options.ValidateBaseOptions("stop_db")
+func (options *VStopDatabaseOptions) validateRequiredOptions(log vlog.Printer) error {
+	err := options.validateBaseOptions("stop_db", log)
 	if err != nil {
 		return err
 	}
@@ -63,11 +65,16 @@ func (options *VStopDatabaseOptions) validateRequiredOptions() error {
 	return nil
 }
 
-func (options *VStopDatabaseOptions) validateEonOptions(config *ClusterConfig) error {
+func (options *VStopDatabaseOptions) validateEonOptions(config *ClusterConfig, log vlog.Printer) error {
 	// if db is enterprise db and we see --drain-seconds, we will ignore it
-	if !options.IsEonMode(config) {
+	isEon, err := options.isEonMode(config)
+	if err != nil {
+		return err
+	}
+
+	if !isEon {
 		if options.DrainSeconds != nil {
-			vlog.LogPrintInfoln("Notice: --drain-seconds option will be ignored because database is in enterprise mode." +
+			log.PrintInfo("Notice: --drain-seconds option will be ignored because database is in enterprise mode." +
 				" Connection draining is only available in eon mode.")
 		}
 		options.DrainSeconds = nil
@@ -83,14 +90,14 @@ func (options *VStopDatabaseOptions) validateExtraOptions() error {
 	return nil
 }
 
-func (options *VStopDatabaseOptions) validateParseOptions(config *ClusterConfig) error {
+func (options *VStopDatabaseOptions) validateParseOptions(config *ClusterConfig, log vlog.Printer) error {
 	// batch 1: validate required parameters
-	err := options.validateRequiredOptions()
+	err := options.validateRequiredOptions(log)
 	if err != nil {
 		return err
 	}
 	// batch 2: validate eon params
-	err = options.validateEonOptions(config)
+	err = options.validateEonOptions(config, log)
 	if err != nil {
 		return err
 	}
@@ -116,8 +123,8 @@ func (options *VStopDatabaseOptions) analyzeOptions() (err error) {
 	return nil
 }
 
-func (options *VStopDatabaseOptions) ValidateAnalyzeOptions(config *ClusterConfig) error {
-	if err := options.validateParseOptions(config); err != nil {
+func (options *VStopDatabaseOptions) validateAnalyzeOptions(config *ClusterConfig, log vlog.Printer) error {
+	if err := options.validateParseOptions(config, log); err != nil {
 		return err
 	}
 	return options.analyzeOptions()
@@ -130,13 +137,7 @@ func (vcc *VClusterCommands) VStopDatabase(options *VStopDatabaseOptions) error 
 	 *   - Give the instructions to the VClusterOpEngine to run
 	 */
 
-	// get config from vertica_cluster.yaml
-	config, err := options.GetDBConfig()
-	if err != nil {
-		return err
-	}
-
-	err = options.ValidateAnalyzeOptions(config)
+	err := options.validateAnalyzeOptions(options.Config, vcc.Log)
 	if err != nil {
 		return err
 	}
@@ -146,24 +147,29 @@ func (vcc *VClusterCommands) VStopDatabase(options *VStopDatabaseOptions) error 
 	stopDBInfo.UserName = *options.UserName
 	stopDBInfo.Password = options.Password
 	stopDBInfo.DrainSeconds = options.DrainSeconds
-	stopDBInfo.DBName, stopDBInfo.Hosts = options.GetNameAndHosts(config)
-	stopDBInfo.IsEon = options.IsEonMode(config)
+	stopDBInfo.DBName, stopDBInfo.Hosts, err = options.getNameAndHosts(options.Config)
+	if err != nil {
+		return err
+	}
+
+	stopDBInfo.IsEon, err = options.isEonMode(options.Config)
+	if err != nil {
+		return err
+	}
 
 	instructions, err := vcc.produceStopDBInstructions(stopDBInfo, options)
 	if err != nil {
-		vlog.LogPrintError("fail to produce instructions, %s", err)
-		return err
+		return fmt.Errorf("fail to production instructions: %w", err)
 	}
 
 	// Create a VClusterOpEngine, and add certs to the engine
 	certs := HTTPSCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := MakeClusterOpEngine(instructions, &certs)
+	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
 
 	// Give the instructions to the VClusterOpEngine to run
-	runError := clusterOpEngine.Run()
+	runError := clusterOpEngine.run(vcc.Log)
 	if runError != nil {
-		vlog.LogPrintError("fail to stop database, %s", runError)
-		return runError
+		return fmt.Errorf("fail to stop database: %w", runError)
 	}
 
 	return nil
@@ -187,13 +193,13 @@ func (vcc *VClusterCommands) produceStopDBInstructions(stopDBInfo *VStopDatabase
 	usePassword := false
 	if stopDBInfo.Password != nil {
 		usePassword = true
-		err := options.ValidateUserName()
+		err := options.validateUserName(vcc.Log)
 		if err != nil {
 			return instructions, err
 		}
 	}
 
-	httpsGetUpNodesOp, err := makeHTTPSGetUpNodesOp(stopDBInfo.DBName, stopDBInfo.Hosts,
+	httpsGetUpNodesOp, err := makeHTTPSGetUpNodesOp(vcc.Log, stopDBInfo.DBName, stopDBInfo.Hosts,
 		usePassword, *options.UserName, stopDBInfo.Password)
 	if err != nil {
 		return instructions, err
@@ -201,16 +207,16 @@ func (vcc *VClusterCommands) produceStopDBInstructions(stopDBInfo *VStopDatabase
 	instructions = append(instructions, &httpsGetUpNodesOp)
 
 	if stopDBInfo.IsEon {
-		httpsSyncCatalogOp, e := makeHTTPSSyncCatalogOpWithoutHosts(usePassword, *options.UserName, stopDBInfo.Password)
+		httpsSyncCatalogOp, e := makeHTTPSSyncCatalogOpWithoutHosts(vcc.Log, usePassword, *options.UserName, stopDBInfo.Password)
 		if e != nil {
 			return instructions, e
 		}
 		instructions = append(instructions, &httpsSyncCatalogOp)
 	} else {
-		vlog.LogPrintInfoln("Skipping sync catalog for an enterprise database")
+		vcc.Log.PrintInfo("Skipping sync catalog for an enterprise database")
 	}
 
-	httpsStopDBOp, err := makeHTTPSStopDBOp(usePassword, *options.UserName, stopDBInfo.Password, stopDBInfo.DrainSeconds)
+	httpsStopDBOp, err := makeHTTPSStopDBOp(vcc.Log, usePassword, *options.UserName, stopDBInfo.Password, stopDBInfo.DrainSeconds)
 	if err != nil {
 		return instructions, err
 	}

@@ -21,11 +21,13 @@ type deleteDirParams struct {
 }
 
 func makeNMADeleteDirectoriesOp(
+	log vlog.Printer,
 	vdb *VCoordinationDatabase,
 	forceDelete bool,
 ) (NMADeleteDirectoriesOp, error) {
 	nmaDeleteDirectoriesOp := NMADeleteDirectoriesOp{}
 	nmaDeleteDirectoriesOp.name = "NMADeleteDirectoriesOp"
+	nmaDeleteDirectoriesOp.log = log.WithName(nmaDeleteDirectoriesOp.name)
 	nmaDeleteDirectoriesOp.hosts = vdb.HostList
 
 	err := nmaDeleteDirectoriesOp.buildRequestBody(vdb, forceDelete)
@@ -69,21 +71,17 @@ func (op *NMADeleteDirectoriesOp) buildRequestBody(
 		}
 		op.hostRequestBodyMap[h] = string(dataBytes)
 
-		vlog.LogInfo("Host %s delete directory params %+v", h, p)
+		op.log.Info("delete directory params", "host", h, "params", p)
 	}
 
 	return nil
 }
 
 func (op *NMADeleteDirectoriesOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildNMAEndpoint("directories/delete")
+		httpRequest.buildNMAEndpoint("directories/delete")
 		httpRequest.RequestData = op.hostRequestBodyMap[host]
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
 	}
@@ -92,7 +90,7 @@ func (op *NMADeleteDirectoriesOp) setupClusterHTTPRequest(hosts []string) error 
 }
 
 func (op *NMADeleteDirectoriesOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }

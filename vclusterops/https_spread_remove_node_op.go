@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
+	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 type HTTPSSpreadRemoveNodeOp struct {
@@ -28,10 +29,11 @@ type HTTPSSpreadRemoveNodeOp struct {
 	RequestParams map[string]string
 }
 
-func makeHTTPSSpreadRemoveNodeOp(hostsToRemove []string, initiatorHost []string, useHTTPPassword bool,
+func makeHTTPSSpreadRemoveNodeOp(log vlog.Printer, hostsToRemove []string, initiatorHost []string, useHTTPPassword bool,
 	userName string, httpsPassword *string, hostNodeMap vHostNodeMap) (HTTPSSpreadRemoveNodeOp, error) {
 	op := HTTPSSpreadRemoveNodeOp{}
 	op.name = "HTTPSSpreadRemoveNodeOp"
+	op.log = log.WithName(op.name)
 	op.hosts = initiatorHost
 	op.useHTTPPassword = useHTTPPassword
 
@@ -51,14 +53,10 @@ func makeHTTPSSpreadRemoveNodeOp(hostsToRemove []string, initiatorHost []string,
 }
 
 func (op *HTTPSSpreadRemoveNodeOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildHTTPSEndpoint("config/spread/remove")
+		httpRequest.buildHTTPSEndpoint("config/spread/remove")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -70,7 +68,7 @@ func (op *HTTPSSpreadRemoveNodeOp) setupClusterHTTPRequest(hosts []string) error
 }
 
 func (op *HTTPSSpreadRemoveNodeOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 

@@ -41,10 +41,11 @@ type prepareDirectoriesRequestData struct {
 	IgnoreParent         bool     `json:"ignore_parent"`
 }
 
-func makeNMAPrepareDirectoriesOp(hostNodeMap vHostNodeMap,
+func makeNMAPrepareDirectoriesOp(log vlog.Printer, hostNodeMap vHostNodeMap,
 	forceCleanup, forRevive bool) (NMAPrepareDirectoriesOp, error) {
 	nmaPrepareDirectoriesOp := NMAPrepareDirectoriesOp{}
 	nmaPrepareDirectoriesOp.name = "NMAPrepareDirectoriesOp"
+	nmaPrepareDirectoriesOp.log = log.WithName(nmaPrepareDirectoriesOp.name)
 	nmaPrepareDirectoriesOp.forceCleanup = forceCleanup
 	nmaPrepareDirectoriesOp.forRevive = forRevive
 
@@ -78,20 +79,16 @@ func (op *NMAPrepareDirectoriesOp) setupRequestBody(hostNodeMap vHostNodeMap) er
 
 		op.hostRequestBodyMap[host] = string(dataBytes)
 	}
-	vlog.LogInfo("[%s] request data: %+v", op.name, op.hostRequestBodyMap)
+	op.log.Info("request data", "op name", op.name, "hostRequestBodyMap", op.hostRequestBodyMap)
 
 	return nil
 }
 
 func (op *NMAPrepareDirectoriesOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildNMAEndpoint("directories/prepare")
+		httpRequest.buildNMAEndpoint("directories/prepare")
 		httpRequest.RequestData = op.hostRequestBodyMap[host]
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
 	}
@@ -100,7 +97,7 @@ func (op *NMAPrepareDirectoriesOp) setupClusterHTTPRequest(hosts []string) error
 }
 
 func (op *NMAPrepareDirectoriesOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 

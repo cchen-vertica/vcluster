@@ -22,6 +22,7 @@ import (
 	"golang.org/x/exp/slices"
 
 	"github.com/vertica/vcluster/vclusterops/util"
+	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 type HTTPSCreateDepotOp struct {
@@ -31,10 +32,11 @@ type HTTPSCreateDepotOp struct {
 	RequestParams  map[string]string
 }
 
-func makeHTTPSCreateClusterDepotOp(vdb *VCoordinationDatabase, hosts []string,
+func makeHTTPSCreateClusterDepotOp(log vlog.Printer, vdb *VCoordinationDatabase, hosts []string,
 	useHTTPPassword bool, userName string, httpsPassword *string) (HTTPSCreateDepotOp, error) {
 	httpsCreateDepotOp := HTTPSCreateDepotOp{}
 	httpsCreateDepotOp.name = "HTTPSCreateDepotOp"
+	httpsCreateDepotOp.log = log.WithName(httpsCreateDepotOp.name)
 	httpsCreateDepotOp.hosts = hosts
 	httpsCreateDepotOp.useHTTPPassword = useHTTPPassword
 
@@ -61,14 +63,10 @@ func makeHTTPSCreateClusterDepotOp(vdb *VCoordinationDatabase, hosts []string,
 }
 
 func (op *HTTPSCreateDepotOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildHTTPSEndpoint("cluster/depot")
+		httpRequest.buildHTTPSEndpoint("cluster/depot")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -81,7 +79,7 @@ func (op *HTTPSCreateDepotOp) setupClusterHTTPRequest(hosts []string) error {
 }
 
 func (op *HTTPSCreateDepotOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }

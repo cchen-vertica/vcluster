@@ -28,12 +28,13 @@ type HTTPCheckNodeStateOp struct {
 	OpHTTPSBase
 }
 
-func makeHTTPCheckNodeStateOp(hosts []string,
+func makeHTTPCheckNodeStateOp(log vlog.Printer, hosts []string,
 	useHTTPPassword bool,
 	userName string,
 	httpsPassword *string,
 ) (HTTPCheckNodeStateOp, error) {
 	nodeStateChecker := HTTPCheckNodeStateOp{}
+	nodeStateChecker.log = log.WithName(nodeStateChecker.name)
 	nodeStateChecker.name = "HTTPCheckNodeStateOp"
 	// The hosts are the ones we are going to talk to.
 	// They can be a subset of the actual host information that we return,
@@ -52,14 +53,10 @@ func makeHTTPCheckNodeStateOp(hosts []string,
 }
 
 func (op *HTTPCheckNodeStateOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = GetMethod
-		httpRequest.BuildHTTPSEndpoint("nodes")
+		httpRequest.buildHTTPSEndpoint("nodes")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -71,7 +68,7 @@ func (op *HTTPCheckNodeStateOp) setupClusterHTTPRequest(hosts []string) error {
 }
 
 func (op *HTTPCheckNodeStateOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
@@ -91,8 +88,8 @@ func (op *HTTPCheckNodeStateOp) processResult(execContext *OpEngineExecContext) 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
-		if result.IsUnauthorizedRequest() {
-			vlog.LogPrintError("[%s] unauthorized request: %s", op.name, result.content)
+		if result.isUnauthorizedRequest() {
+			op.log.PrintError("[%s] unauthorized request: %s", op.name, result.content)
 			// return here because we assume that
 			// we will get the same error across other nodes
 			allErrs = errors.Join(allErrs, result.err)
@@ -101,8 +98,8 @@ func (op *HTTPCheckNodeStateOp) processResult(execContext *OpEngineExecContext) 
 
 		if !result.isPassing() {
 			// for any error, we continue to the next node
-			if result.IsInternalError() {
-				vlog.LogPrintError("[%s] internal error of the /nodes endpoint: %s", op.name, result.content)
+			if result.isInternalError() {
+				op.log.PrintError("[%s] internal error of the /nodes endpoint: %s", op.name, result.content)
 				// At internal error originated from the server, so its a
 				// response, just not a successful one.
 				respondingNodeCount++

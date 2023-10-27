@@ -19,6 +19,7 @@ import (
 	"errors"
 
 	"github.com/vertica/vcluster/vclusterops/util"
+	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 type HTTPSMarkEphemeralNodeOp struct {
@@ -27,13 +28,14 @@ type HTTPSMarkEphemeralNodeOp struct {
 	targetNodeName string
 }
 
-func makeHTTPSMarkEphemeralNodeOp(nodeName string,
+func makeHTTPSMarkEphemeralNodeOp(log vlog.Printer, nodeName string,
 	initiatorHost []string,
 	useHTTPPassword bool,
 	userName string,
 	httpsPassword *string) (HTTPSMarkEphemeralNodeOp, error) {
 	op := HTTPSMarkEphemeralNodeOp{}
 	op.name = "HTTPSMarkEphemeralNodeOp"
+	op.log = log.WithName(op.name)
 	op.hosts = initiatorHost
 	op.targetNodeName = nodeName
 	op.useHTTPPassword = useHTTPPassword
@@ -47,14 +49,10 @@ func makeHTTPSMarkEphemeralNodeOp(nodeName string,
 }
 
 func (op *HTTPSMarkEphemeralNodeOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildHTTPSEndpoint("nodes/" + op.targetNodeName + "/ephemeral")
+		httpRequest.buildHTTPSEndpoint("nodes/" + op.targetNodeName + "/ephemeral")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -65,7 +63,7 @@ func (op *HTTPSMarkEphemeralNodeOp) setupClusterHTTPRequest(hosts []string) erro
 }
 
 func (op *HTTPSMarkEphemeralNodeOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
@@ -83,7 +81,7 @@ func (op *HTTPSMarkEphemeralNodeOp) processResult(_ *OpEngineExecContext) error 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
-		if !result.IsSuccess() {
+		if !result.isSuccess() {
 			allErrs = errors.Join(allErrs, result.err)
 			continue
 		}

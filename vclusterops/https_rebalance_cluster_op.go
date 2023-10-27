@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
+	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 const RebalanceClusterSuccMsg = "REBALANCED"
@@ -31,10 +32,11 @@ type HTTPSRebalanceClusterOp struct {
 }
 
 // makeHTTPSRebalanceClusterOp will make an op that call vertica-http service to rebalance the cluster
-func makeHTTPSRebalanceClusterOp(initiatorHost []string, useHTTPPassword bool, userName string,
+func makeHTTPSRebalanceClusterOp(log vlog.Printer, initiatorHost []string, useHTTPPassword bool, userName string,
 	httpsPassword *string) (HTTPSRebalanceClusterOp, error) {
 	httpsRBCOp := HTTPSRebalanceClusterOp{}
 	httpsRBCOp.name = "HTTPSRebalanceClusterOp"
+	httpsRBCOp.log = log.WithName(httpsRBCOp.name)
 	httpsRBCOp.hosts = initiatorHost
 
 	httpsRBCOp.useHTTPPassword = useHTTPPassword
@@ -48,14 +50,10 @@ func makeHTTPSRebalanceClusterOp(initiatorHost []string, useHTTPPassword bool, u
 }
 
 func (op *HTTPSRebalanceClusterOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildHTTPSEndpoint("cluster/rebalance")
+		httpRequest.buildHTTPSEndpoint("cluster/rebalance")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -66,7 +64,7 @@ func (op *HTTPSRebalanceClusterOp) setupClusterHTTPRequest(hosts []string) error
 }
 
 func (op *HTTPSRebalanceClusterOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
@@ -84,11 +82,11 @@ func (op *HTTPSRebalanceClusterOp) processResult(_ *OpEngineExecContext) error {
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
-		if result.IsUnauthorizedRequest() {
+		if result.isUnauthorizedRequest() {
 			// skip checking response from other nodes because we will get the same error there
 			return result.err
 		}
-		if !result.IsSuccess() {
+		if !result.isSuccess() {
 			allErrs = errors.Join(allErrs, result.err)
 			// try processing other hosts' responses when the current host has some server errors
 			continue

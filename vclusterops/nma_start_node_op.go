@@ -19,6 +19,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 type nmaStartNodeOp struct {
@@ -27,15 +29,17 @@ type nmaStartNodeOp struct {
 	vdb                *VCoordinationDatabase
 }
 
-func makeNMAStartNodeOp(hosts []string) nmaStartNodeOp {
+func makeNMAStartNodeOp(log vlog.Printer,
+	hosts []string) nmaStartNodeOp {
 	startNodeOp := nmaStartNodeOp{}
 	startNodeOp.name = "NMAStartNodeOp"
+	startNodeOp.log = log.WithName(startNodeOp.name)
 	startNodeOp.hosts = hosts
 	return startNodeOp
 }
 
-func makeNMAStartNodeOpWithVDB(hosts []string, vdb *VCoordinationDatabase) nmaStartNodeOp {
-	startNodeOp := makeNMAStartNodeOp(hosts)
+func makeNMAStartNodeOpWithVDB(log vlog.Printer, hosts []string, vdb *VCoordinationDatabase) nmaStartNodeOp {
+	startNodeOp := makeNMAStartNodeOp(log, hosts)
 	startNodeOp.vdb = vdb
 	return startNodeOp
 }
@@ -94,14 +98,10 @@ func (op *nmaStartNodeOp) updateHostRequestBodyMapFromNodeStartCommand(host stri
 }
 
 func (op *nmaStartNodeOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildNMAEndpoint("nodes/start")
+		httpRequest.buildNMAEndpoint("nodes/start")
 		httpRequest.RequestData = op.hostRequestBodyMap[host]
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
 	}
@@ -115,7 +115,7 @@ func (op *nmaStartNodeOp) prepare(execContext *OpEngineExecContext) error {
 		return err
 	}
 
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }

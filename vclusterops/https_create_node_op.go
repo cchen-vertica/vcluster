@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
+	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 type HTTPSCreateNodeOp struct {
@@ -28,17 +29,18 @@ type HTTPSCreateNodeOp struct {
 	RequestParams map[string]string
 }
 
-func makeHTTPSCreateNodeOp(hosts []string, bootstrapHost []string,
+func makeHTTPSCreateNodeOp(log vlog.Printer, newNodeHosts []string, bootstrapHost []string,
 	useHTTPPassword bool, userName string, httpsPassword *string,
 	vdb *VCoordinationDatabase, scName string) (HTTPSCreateNodeOp, error) {
 	createNodeOp := HTTPSCreateNodeOp{}
 	createNodeOp.name = "HTTPSCreateNodeOp"
+	createNodeOp.log = log.WithName(createNodeOp.name)
 	createNodeOp.hosts = bootstrapHost
 	createNodeOp.RequestParams = make(map[string]string)
 	// HTTPS create node endpoint requires passing everything before node name
 	createNodeOp.RequestParams["catalog-prefix"] = vdb.CatalogPrefix + "/" + vdb.Name
 	createNodeOp.RequestParams["data-prefix"] = vdb.DataPrefix + "/" + vdb.Name
-	createNodeOp.RequestParams["hosts"] = util.ArrayToString(hosts, ",")
+	createNodeOp.RequestParams["hosts"] = util.ArrayToString(newNodeHosts, ",")
 	if scName != "" {
 		createNodeOp.RequestParams["subcluster"] = scName
 	}
@@ -49,16 +51,12 @@ func makeHTTPSCreateNodeOp(hosts []string, bootstrapHost []string,
 }
 
 func (op *HTTPSCreateNodeOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PostMethod
 		// note that this will be updated in Prepare()
 		// because the endpoint only accept parameters in query
-		httpRequest.BuildHTTPSEndpoint("nodes")
+		httpRequest.buildHTTPSEndpoint("nodes")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -87,7 +85,7 @@ func (op *HTTPSCreateNodeOp) prepare(execContext *OpEngineExecContext) error {
 		return err
 	}
 
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }

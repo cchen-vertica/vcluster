@@ -30,11 +30,12 @@ type HTTPSGetUpNodesOp struct {
 	DBName string
 }
 
-func makeHTTPSGetUpNodesOp(dbName string, hosts []string,
+func makeHTTPSGetUpNodesOp(log vlog.Printer, dbName string, hosts []string,
 	useHTTPPassword bool, userName string, httpsPassword *string,
 ) (HTTPSGetUpNodesOp, error) {
 	httpsGetUpNodesOp := HTTPSGetUpNodesOp{}
 	httpsGetUpNodesOp.name = "HTTPSGetUpNodesOp"
+	httpsGetUpNodesOp.log = log.WithName(httpsGetUpNodesOp.name)
 	httpsGetUpNodesOp.hosts = hosts
 	httpsGetUpNodesOp.useHTTPPassword = useHTTPPassword
 	httpsGetUpNodesOp.DBName = dbName
@@ -51,14 +52,10 @@ func makeHTTPSGetUpNodesOp(dbName string, hosts []string,
 }
 
 func (op *HTTPSGetUpNodesOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = GetMethod
-		httpRequest.BuildHTTPSEndpoint("nodes")
+		httpRequest.buildHTTPSEndpoint("nodes")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -70,7 +67,7 @@ func (op *HTTPSGetUpNodesOp) setupClusterHTTPRequest(hosts []string) error {
 }
 
 func (op *HTTPSGetUpNodesOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
@@ -98,8 +95,14 @@ func (op *HTTPSGetUpNodesOp) execute(execContext *OpEngineExecContext) error {
 		           'down_since' : null
 		           'build_info' : "v12.0.4-7142c8b01f373cc1aa60b1a8feff6c40bfb7afe8"
 	}]}
-	or a message if the endpoint does not return a well-structured JSON, an example:
-	{'message': 'Local node has not joined cluster yet, HTTP server will accept connections when the node has joined the cluster\n'}
+     or an rfc error if the endpoint does not return a well-structured JSON, an example:
+    {
+    "type": "https:\/\/integrators.vertica.com\/rest\/errors\/unauthorized-request",
+    "title": "Unauthorized-request",
+    "detail": "Local node has not joined cluster yet, HTTP server will accept connections when the node has joined the cluster\n",
+    "host": "0.0.0.0",
+    "status": 401
+    }
 */
 
 func (op *HTTPSGetUpNodesOp) processResult(execContext *OpEngineExecContext) error {
@@ -119,7 +122,7 @@ func (op *HTTPSGetUpNodesOp) processResult(execContext *OpEngineExecContext) err
 		// We assume all the hosts are in the same db cluster
 		// If any of the hosts reject the request, other hosts will reject the request too
 		// Do not try other hosts when we see a http failure
-		if result.isFailing() && result.IsHTTPRunning() {
+		if result.isFailing() && result.isHTTPRunning() {
 			exceptionHosts = append(exceptionHosts, host)
 			continue
 		}
@@ -164,11 +167,11 @@ func (op *HTTPSGetUpNodesOp) processResult(execContext *OpEngineExecContext) err
 	}
 
 	if len(exceptionHosts) > 0 {
-		vlog.LogPrintError(`[%s] fail to call https endpoint of database %s on hosts %s`, op.name, op.DBName, exceptionHosts)
+		op.log.PrintError(`[%s] fail to call https endpoint of database %s on hosts %s`, op.name, op.DBName, exceptionHosts)
 	}
 
 	if len(downHosts) > 0 {
-		vlog.LogPrintError(`[%s] did not detect database %s running on hosts %v`, op.name, op.DBName, downHosts)
+		op.log.PrintError(`[%s] did not detect database %s running on hosts %v`, op.name, op.DBName, downHosts)
 	}
 
 	return errors.Join(allErrs, fmt.Errorf("no up nodes detected"))

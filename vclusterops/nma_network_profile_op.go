@@ -20,28 +20,26 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
+	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 type NMANetworkProfileOp struct {
 	OpBase
 }
 
-func makeNMANetworkProfileOp(hosts []string) NMANetworkProfileOp {
+func makeNMANetworkProfileOp(log vlog.Printer, hosts []string) NMANetworkProfileOp {
 	nmaNetworkProfileOp := NMANetworkProfileOp{}
 	nmaNetworkProfileOp.name = "NMANetworkProfileOp"
+	nmaNetworkProfileOp.log = log.WithName(nmaNetworkProfileOp.name)
 	nmaNetworkProfileOp.hosts = hosts
 	return nmaNetworkProfileOp
 }
 
 func (op *NMANetworkProfileOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = GetMethod
-		httpRequest.BuildNMAEndpoint("network-profiles")
+		httpRequest.buildNMAEndpoint("network-profiles")
 		httpRequest.QueryParams = map[string]string{"broadcast-hint": host}
 
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
@@ -51,7 +49,7 @@ func (op *NMANetworkProfileOp) setupClusterHTTPRequest(hosts []string) error {
 }
 
 func (op *NMANetworkProfileOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 

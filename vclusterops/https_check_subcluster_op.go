@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
+	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 type HTTPSCheckSubclusterOp struct {
@@ -29,10 +30,11 @@ type HTTPSCheckSubclusterOp struct {
 	ctlSetSize  int
 }
 
-func makeHTTPSCheckSubclusterOp(useHTTPPassword bool, userName string, httpsPassword *string,
+func makeHTTPSCheckSubclusterOp(log vlog.Printer, useHTTPPassword bool, userName string, httpsPassword *string,
 	scName string, isPrimary bool, ctlSetSize int) (HTTPSCheckSubclusterOp, error) {
 	httpsCheckSubclusterOp := HTTPSCheckSubclusterOp{}
 	httpsCheckSubclusterOp.name = "HTTPSCheckSubclusterOp"
+	httpsCheckSubclusterOp.log = log.WithName(httpsCheckSubclusterOp.name)
 	httpsCheckSubclusterOp.scName = scName
 	httpsCheckSubclusterOp.isSecondary = !isPrimary
 	httpsCheckSubclusterOp.ctlSetSize = ctlSetSize
@@ -50,14 +52,10 @@ func makeHTTPSCheckSubclusterOp(useHTTPPassword bool, userName string, httpsPass
 }
 
 func (op *HTTPSCheckSubclusterOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = GetMethod
-		httpRequest.BuildHTTPSEndpoint("subclusters/" + op.scName)
+		httpRequest.buildHTTPSEndpoint("subclusters/" + op.scName)
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -72,7 +70,7 @@ func (op *HTTPSCheckSubclusterOp) prepare(execContext *OpEngineExecContext) erro
 	if len(execContext.upHosts) == 0 {
 		return fmt.Errorf(`[%s] Cannot find any up hosts in OpEngineExecContext`, op.name)
 	}
-	execContext.dispatcher.Setup(execContext.upHosts)
+	execContext.dispatcher.setup(execContext.upHosts)
 
 	return op.setupClusterHTTPRequest(execContext.upHosts)
 }
@@ -98,7 +96,7 @@ func (op *HTTPSCheckSubclusterOp) processResult(_ *OpEngineExecContext) error {
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
-		if result.IsUnauthorizedRequest() {
+		if result.isUnauthorizedRequest() {
 			// skip checking response from other nodes because we will get the same error there
 			return result.err
 		}

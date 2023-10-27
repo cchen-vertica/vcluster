@@ -26,7 +26,7 @@ type CmdBase struct {
 // convert a host string into a list of hosts,
 // save the list into options.RawHosts;
 // the hosts should be separated by comma, and will be converted to lower case
-func (c *CmdBase) ParseHostList(options *vclusterops.DatabaseOptions) error {
+func (c *CmdBase) parseHostList(options *vclusterops.DatabaseOptions) error {
 	inputHostList, err := util.SplitHosts(*c.hostListStr)
 	if err != nil {
 		return err
@@ -55,8 +55,19 @@ func (c *CmdBase) ParseArgv() error {
 }
 
 // validate and parse argv
-func (c *CmdBase) ValidateParseArgv(commandType string) error {
-	vlog.LogArgParse(&c.argv)
+func (c *CmdBase) ValidateParseArgv(commandType string, log vlog.Printer) error {
+	log.LogArgParse(&c.argv)
+	return c.ValidateParseArgvHelper(commandType)
+}
+
+// validate and parse masked argv
+// Some database actions, such as createDB and reviveDB, need to mask sensitive parameters in the log
+func (c *CmdBase) ValidateParseMaskedArgv(commandType string, log vlog.Printer) error {
+	log.LogMaskedArgParse(c.argv)
+	return c.ValidateParseArgvHelper(commandType)
+}
+
+func (c *CmdBase) ValidateParseArgvHelper(commandType string) error {
 	if c.parser == nil {
 		return fmt.Errorf("unexpected nil - the parser was nil")
 	}
@@ -64,7 +75,6 @@ func (c *CmdBase) ValidateParseArgv(commandType string) error {
 		c.PrintUsage(commandType)
 		return fmt.Errorf("zero args found, at least one argument expected")
 	}
-
 	return c.ParseArgv()
 }
 
@@ -72,7 +82,7 @@ func (c *CmdBase) ValidateParseArgv(commandType string) error {
 func (c *CmdBase) ValidateParseBaseOptions(opt *vclusterops.DatabaseOptions) error {
 	if *opt.HonorUserInput {
 		// parse raw host str input into a []string
-		err := c.ParseHostList(opt)
+		err := c.parseHostList(opt)
 		if err != nil {
 			return err
 		}

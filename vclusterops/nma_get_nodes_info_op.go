@@ -17,6 +17,8 @@ package vclusterops
 
 import (
 	"errors"
+
+	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 // nmaGetNodesInfoOp get nodes info from the NMA /v1/nodes endpoint.
@@ -28,11 +30,12 @@ type nmaGetNodesInfoOp struct {
 	vdb           *VCoordinationDatabase
 }
 
-func makeNMAGetNodesInfoOp(hosts []string,
+func makeNMAGetNodesInfoOp(log vlog.Printer, hosts []string,
 	dbName, catalogPrefix string,
 	vdb *VCoordinationDatabase) nmaGetNodesInfoOp {
 	op := nmaGetNodesInfoOp{}
 	op.name = "NMAGetNodesInfoOp"
+	op.log = log.WithName(op.name)
 	op.hosts = hosts
 	op.dbName = dbName
 	op.catalogPrefix = catalogPrefix
@@ -42,14 +45,10 @@ func makeNMAGetNodesInfoOp(hosts []string,
 }
 
 func (op *nmaGetNodesInfoOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = GetMethod
-		httpRequest.BuildNMAEndpoint("nodes")
+		httpRequest.buildNMAEndpoint("nodes")
 		httpRequest.QueryParams = map[string]string{"db_name": op.dbName, "catalog_prefix": op.catalogPrefix}
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
 	}
@@ -58,7 +57,7 @@ func (op *nmaGetNodesInfoOp) setupClusterHTTPRequest(hosts []string) error {
 }
 
 func (op *nmaGetNodesInfoOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }

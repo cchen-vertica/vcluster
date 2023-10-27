@@ -22,6 +22,7 @@ import (
 	"strconv"
 
 	"github.com/vertica/vcluster/vclusterops/util"
+	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 type HTTPSStopDBOp struct {
@@ -30,10 +31,11 @@ type HTTPSStopDBOp struct {
 	RequestParams map[string]string
 }
 
-func makeHTTPSStopDBOp(useHTTPPassword bool, userName string,
+func makeHTTPSStopDBOp(log vlog.Printer, useHTTPPassword bool, userName string,
 	httpsPassword *string, timeout *int) (HTTPSStopDBOp, error) {
 	httpsStopDBOp := HTTPSStopDBOp{}
 	httpsStopDBOp.name = "HTTPSStopDBOp"
+	httpsStopDBOp.log = log.WithName(httpsStopDBOp.name)
 	httpsStopDBOp.useHTTPPassword = useHTTPPassword
 
 	// set the query params, "timeout" is optional
@@ -54,14 +56,10 @@ func makeHTTPSStopDBOp(useHTTPPassword bool, userName string,
 }
 
 func (op *HTTPSStopDBOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildHTTPSEndpoint("cluster/shutdown")
+		httpRequest.buildHTTPSEndpoint("cluster/shutdown")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -79,7 +77,7 @@ func (op *HTTPSStopDBOp) prepare(execContext *OpEngineExecContext) error {
 	}
 	// use first up host to execute https post request
 	hosts := []string{execContext.upHosts[0]}
-	execContext.dispatcher.Setup(hosts)
+	execContext.dispatcher.setup(hosts)
 
 	return op.setupClusterHTTPRequest(hosts)
 }

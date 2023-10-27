@@ -15,29 +15,30 @@
 
 package vclusterops
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/vertica/vcluster/vclusterops/vlog"
+)
 
 type NMAHealthOp struct {
 	OpBase
 }
 
-func makeNMAHealthOp(hosts []string) NMAHealthOp {
+func makeNMAHealthOp(log vlog.Printer, hosts []string) NMAHealthOp {
 	nmaHealthOp := NMAHealthOp{}
 	nmaHealthOp.name = "NMAHealthOp"
+	nmaHealthOp.log = log.WithName(nmaHealthOp.name)
 	nmaHealthOp.hosts = hosts
 	return nmaHealthOp
 }
 
 // setupClusterHTTPRequest works as the module setup in Admintools
 func (op *NMAHealthOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = GetMethod
-		httpRequest.BuildNMAEndpoint("health")
+		httpRequest.buildNMAEndpoint("health")
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
 	}
 
@@ -45,7 +46,7 @@ func (op *NMAHealthOp) setupClusterHTTPRequest(hosts []string) error {
 }
 
 func (op *NMAHealthOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }

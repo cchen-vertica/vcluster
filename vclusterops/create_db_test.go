@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/vertica/vcluster/vclusterops/util"
+	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 const defaultPath = "/data"
@@ -59,6 +60,7 @@ func TestValidateDepotSize(t *testing.T) {
 
 func TestWriteClusterConfig(t *testing.T) {
 	const dbName = "practice_db"
+	const scName = "default_subcluster"
 
 	// generate a YAML file based on a stub vdb
 	vdb := VCoordinationDatabase{}
@@ -71,11 +73,13 @@ func TestWriteClusterConfig(t *testing.T) {
 	for i, h := range vdb.HostList {
 		n := VCoordinationNode{}
 		n.Name = fmt.Sprintf("node_name_%d", i+1)
+		n.Address = h
+		n.Subcluster = scName
 		vdb.HostNodeMap[h] = &n
 	}
 	vdb.IsEon = true
 
-	err := WriteClusterConfig(&vdb, nil)
+	err := vdb.WriteClusterConfig(nil, vlog.Printer{})
 	assert.NoError(t, err)
 
 	// compare the generated file with expected output
@@ -85,7 +89,7 @@ func TestWriteClusterConfig(t *testing.T) {
 
 	// now write the config file again
 	// a backup file should be generated
-	err = WriteClusterConfig(&vdb, nil)
+	err = vdb.WriteClusterConfig(nil, vlog.Printer{})
 	assert.NoError(t, err)
 	err = util.CanReadAccessDir(dbName + "/" + ConfigBackupName)
 	assert.NoError(t, err)

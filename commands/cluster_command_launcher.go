@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/vertica/vcluster/vclusterops"
 	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
@@ -52,38 +53,43 @@ type ClusterCommandLauncher struct {
  */
 const minArgs = 2
 const helpString = "help"
+const defaultLogPath = "/opt/vertica/log/vcluster.log"
 
 /* ClusterCommandLauncherFactory()
  * Returns a new instance of a ClusterCommandLauncher
  * with some reasonable defaults.
  */
-func MakeClusterCommandLauncher() ClusterCommandLauncher {
+func MakeClusterCommandLauncher() (ClusterCommandLauncher, vclusterops.VClusterCommands) {
 	// setup logs for command launcher initialization
-	logPath := vlog.ParseLogPathArg(os.Args, vlog.DefaultLogPath)
-	vlog.SetupOrDie(logPath)
-	vlog.LogInfoln("New vcluster command initialization")
+	userCommandString := os.Args[1]
+	log := vlog.Printer{ForCli: true}
+	logPath := parseLogPathArg(os.Args, defaultLogPath)
+	log.SetupOrDie(logPath)
+	vcc := vclusterops.VClusterCommands{
+		Log: log.WithName(userCommandString),
+	}
+	vcc.Log.Info("New vcluster command initialization")
 	newLauncher := ClusterCommandLauncher{}
-
-	allCommands := constructCmds()
+	allCommands := constructCmds(vcc.Log)
 
 	newLauncher.commands = map[string]ClusterCommand{}
 	for _, c := range allCommands {
 		_, existsInMap := newLauncher.commands[c.CommandType()]
 		if existsInMap {
 			// shout loud if there's a programmer error
-			vlog.LogPrintError("Programmer Error: tried add command %s to the commands index twice. Check cluster_command_launcher.go",
+			vcc.Log.PrintError("Programmer Error: tried to add command %s to the commands index twice. Check cluster_command_launcher.go",
 				c.CommandType())
 			os.Exit(1)
 		}
 		newLauncher.commands[c.CommandType()] = c
 	}
 
-	return newLauncher
+	return newLauncher, vcc
 }
 
 // constructCmds returns a list of commands that will be executed
 // by the cluster command launcher.
-func constructCmds() []ClusterCommand {
+func constructCmds(_ vlog.Printer) []ClusterCommand {
 	return []ClusterCommand{
 		// db-scope cmds
 		makeCmdCreateDB(),
@@ -101,6 +107,7 @@ func constructCmds() []ClusterCommand {
 		makeCmdRemoveNode(),
 		makeCmdRestartNodes(),
 		// others
+		makeCmdScrutinize(),
 		makeCmdHelp(),
 		makeCmdInit(),
 		makeCmdConfig(),
@@ -115,23 +122,28 @@ func constructCmds() []ClusterCommand {
  *     + Asks the sub-command to analyze the command line given the
  *       context from the config file.
  *     + Calls Run() for the sub-command
- *     + Returns any errors to the caller
+ *     + Returns any errors to the caller after writing the error to the log
  */
-func (c ClusterCommandLauncher) Run(inputArgv []string) error {
+func (c ClusterCommandLauncher) Run(inputArgv []string, vcc vclusterops.VClusterCommands) error {
+	userCommandString := os.Args[1]
 	c.argv = inputArgv
 	minArgsError := checkMinimumInput(c.argv)
 
 	if minArgsError != nil {
+		vcc.Log.Error(minArgsError, "fail to check minimum argument")
 		return minArgsError
 	}
 
-	subCommand, idError := identifySubcommand(c.commands)
+	subCommand, idError := identifySubcommand(c.commands, userCommandString, vcc.Log)
+
 	if idError != nil {
+		vcc.Log.Error(idError, "fail to recognize command")
 		return idError
 	}
 
-	parseError := subCommand.Parse(inputArgv[2:])
+	parseError := subCommand.Parse(inputArgv[2:], vcc.Log)
 	if parseError != nil {
+		vcc.Log.Error(parseError, "fail to parse command")
 		return parseError
 	}
 
@@ -148,25 +160,29 @@ func (c ClusterCommandLauncher) Run(inputArgv []string) error {
 	/* TODO: this is where we would read a
 	 * configuration file. Not currently implemented.
 	 */
-	analyzeError := subCommand.Analyze()
+	analyzeError := subCommand.Analyze(vcc.Log)
 
 	if analyzeError != nil {
+		vcc.Log.Error(analyzeError, "fail to analyze command")
 		return analyzeError
 	}
-	log := vlog.GetGlobalLogger().Printer
-	return subCommand.Run(log)
+
+	runError := subCommand.Run(vcc)
+	if runError != nil {
+		vcc.Log.Error(runError, "fail to run command")
+	}
+	return runError
 }
 
-func identifySubcommand(commands map[string]ClusterCommand) (ClusterCommand, error) {
-	userCommandString := os.Args[1]
+func identifySubcommand(commands map[string]ClusterCommand, userCommandString string,
+	log vlog.Printer) (ClusterCommand, error) {
 	command, ok := commands[userCommandString]
-
 	if !ok {
 		return nil, fmt.Errorf("unrecognized command '%s'",
 			userCommandString)
 	}
 
-	vlog.LogInfo("Recognized command: %s\n", userCommandString)
+	log.Log.Info("Recognized command", "cmd", userCommandString)
 	return command, nil
 }
 
@@ -177,4 +193,13 @@ func checkMinimumInput(inputArgv []string) error {
 	return fmt.Errorf("expected at least %d arguments but found only %d",
 		minArgs,
 		len(inputArgv))
+}
+
+func parseLogPathArg(argInput []string, defaultPath string) (logPath string) {
+	for idx, arg := range argInput {
+		if arg == "--log-path" {
+			return argInput[idx+1]
+		}
+	}
+	return defaultPath
 }

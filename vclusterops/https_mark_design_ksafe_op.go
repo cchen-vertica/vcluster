@@ -35,6 +35,7 @@ type HTTPSMarkDesignKSafeOp struct {
 }
 
 func makeHTTPSMarkDesignKSafeOp(
+	log vlog.Printer,
 	hosts []string,
 	useHTTPPassword bool,
 	userName string,
@@ -43,6 +44,7 @@ func makeHTTPSMarkDesignKSafeOp(
 ) (HTTPSMarkDesignKSafeOp, error) {
 	httpsMarkDesignKSafeOp := HTTPSMarkDesignKSafeOp{}
 	httpsMarkDesignKSafeOp.name = "HTTPSMarkDesignKsafeOp"
+	httpsMarkDesignKSafeOp.log = log.WithName(httpsMarkDesignKSafeOp.name)
 	httpsMarkDesignKSafeOp.hosts = hosts
 	httpsMarkDesignKSafeOp.useHTTPPassword = useHTTPPassword
 
@@ -62,15 +64,11 @@ func makeHTTPSMarkDesignKSafeOp(
 }
 
 func (op *HTTPSMarkDesignKSafeOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	// in practice, initiator only
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PutMethod
-		httpRequest.BuildHTTPSEndpoint("cluster/k-safety")
+		httpRequest.buildHTTPSEndpoint("cluster/k-safety")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -83,7 +81,7 @@ func (op *HTTPSMarkDesignKSafeOp) setupClusterHTTPRequest(hosts []string) error 
 }
 
 func (op *HTTPSMarkDesignKSafeOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
@@ -147,7 +145,7 @@ func (op *HTTPSMarkDesignKSafeOp) processResult(_ *OpEngineExecContext) error {
 			continue
 		}
 
-		vlog.LogPrintInfo(`[%s] The K-safety value of the database is set as %d`, op.name, ksafeValue)
+		op.log.PrintInfo(`[%s] The K-safety value of the database is set as %d`, op.name, ksafeValue)
 	}
 
 	return allErrs

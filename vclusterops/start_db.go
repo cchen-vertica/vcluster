@@ -34,22 +34,22 @@ func VStartDatabaseOptionsFactory() VStartDatabaseOptions {
 	opt := VStartDatabaseOptions{}
 
 	// set default values to the params
-	opt.SetDefaultValues()
+	opt.setDefaultValues()
 	return opt
 }
 
-func (options *VStartDatabaseOptions) SetDefaultValues() {
-	options.DatabaseOptions.SetDefaultValues()
+func (options *VStartDatabaseOptions) setDefaultValues() {
+	options.DatabaseOptions.setDefaultValues()
 }
 
-func (options *VStartDatabaseOptions) validateRequiredOptions() error {
-	err := options.ValidateBaseOptions("start_db")
+func (options *VStartDatabaseOptions) validateRequiredOptions(log vlog.Printer) error {
+	err := options.validateBaseOptions("start_db", log)
 	if err != nil {
 		return err
 	}
 
 	if *options.HonorUserInput {
-		err = options.ValidateCatalogPath()
+		err = options.validateCatalogPath()
 		if err != nil {
 			return err
 		}
@@ -66,9 +66,9 @@ func (options *VStartDatabaseOptions) validateEonOptions() error {
 	return nil
 }
 
-func (options *VStartDatabaseOptions) validateParseOptions() error {
+func (options *VStartDatabaseOptions) validateParseOptions(log vlog.Printer) error {
 	// batch 1: validate required parameters
-	err := options.validateRequiredOptions()
+	err := options.validateRequiredOptions(log)
 	if err != nil {
 		return err
 	}
@@ -88,8 +88,8 @@ func (options *VStartDatabaseOptions) analyzeOptions() (err error) {
 	return nil
 }
 
-func (options *VStartDatabaseOptions) ValidateAnalyzeOptions() error {
-	if err := options.validateParseOptions(); err != nil {
+func (options *VStartDatabaseOptions) validateAnalyzeOptions(log vlog.Printer) error {
+	if err := options.validateParseOptions(log); err != nil {
 		return err
 	}
 	return options.analyzeOptions()
@@ -102,23 +102,23 @@ func (vcc *VClusterCommands) VStartDatabase(options *VStartDatabaseOptions) erro
 	 *   - Give the instructions to the VClusterOpEngine to run
 	 */
 
-	// load vdb info from the YAML config file
-	// get config from vertica_cluster.yaml
-	config, err := options.GetDBConfig()
-	if err != nil {
-		return err
-	}
-
-	err = options.ValidateAnalyzeOptions()
+	err := options.validateAnalyzeOptions(vcc.Log)
 	if err != nil {
 		return err
 	}
 
 	// get db name and hosts from config file and options
-	dbName, hosts := options.GetNameAndHosts(config)
+	dbName, hosts, err := options.getNameAndHosts(options.Config)
+	if err != nil {
+		return err
+	}
+
 	options.DBName = &dbName
 	options.Hosts = hosts
-	options.CatalogPrefix = options.GetCatalogPrefix(config)
+	options.CatalogPrefix, err = options.getCatalogPrefix(options.Config)
+	if err != nil {
+		return err
+	}
 
 	// set default value to StatePollingTimeout
 	if options.StatePollingTimeout == 0 {
@@ -127,39 +127,42 @@ func (vcc *VClusterCommands) VStartDatabase(options *VStartDatabaseOptions) erro
 
 	var pVDB *VCoordinationDatabase
 	// retrieve database information from cluster_config.json for EON databases
-	if options.IsEonMode(config) {
+	isEon, err := options.isEonMode(options.Config)
+	if err != nil {
+		return err
+	}
+
+	if isEon {
 		if *options.CommunalStorageLocation != "" {
-			vdb, e := options.getVDBWhenDBIsDown()
+			vdb, e := options.getVDBWhenDBIsDown(vcc)
 			if e != nil {
 				return e
 			}
 			// we want to read catalog info only from primary nodes later
-			vdb.filterOutSecondaryNodes()
+			vdb.filterPrimaryNodes()
 			pVDB = &vdb
 		} else {
 			// When communal storage location is missing, we only log a warning message
 			// because fail to read cluster_config.json will not affect start_db in most of the cases.
-			vlog.LogPrintWarningln("communal storage location is not specified for an eon database," +
-				" first start_db after revive_db could fail because we cannot retrieve the correct database information")
+			vcc.Log.PrintWarning("communal storage location is not specified for an eon database," +
+				" first start_db after revive_db could fail because we cannot retrieve the correct database information\n")
 		}
 	}
 
 	// produce start_db instructions
 	instructions, err := vcc.produceStartDBInstructions(options, pVDB)
 	if err != nil {
-		err = fmt.Errorf("fail to production instructions: %w", err)
-		return err
+		return fmt.Errorf("fail to production instructions: %w", err)
 	}
 
 	// create a VClusterOpEngine, and add certs to the engine
 	certs := HTTPSCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := MakeClusterOpEngine(instructions, &certs)
+	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
 
 	// Give the instructions to the VClusterOpEngine to run
-	runError := clusterOpEngine.Run()
+	runError := clusterOpEngine.run(vcc.Log)
 	if runError != nil {
-		runError = fmt.Errorf("fail to start database: %w", runError)
-		return runError
+		return fmt.Errorf("fail to start database: %w", runError)
 	}
 
 	return nil
@@ -181,11 +184,11 @@ func (vcc *VClusterCommands) VStartDatabase(options *VStartDatabaseOptions) erro
 func (vcc *VClusterCommands) produceStartDBInstructions(options *VStartDatabaseOptions, vdb *VCoordinationDatabase) ([]ClusterOp, error) {
 	var instructions []ClusterOp
 
-	nmaHealthOp := makeNMAHealthOp(options.Hosts)
+	nmaHealthOp := makeNMAHealthOp(vcc.Log, options.Hosts)
 	// require to have the same vertica version
 	nmaVerticaVersionOp := makeNMAVerticaVersionOp(vcc.Log, options.Hosts, true)
 	// need username for https operations
-	err := options.SetUsePassword()
+	err := options.setUsePassword(vcc.Log)
 	if err != nil {
 		return instructions, err
 	}
@@ -204,29 +207,36 @@ func (vcc *VClusterCommands) produceStartDBInstructions(options *VStartDatabaseO
 	// When we cannot get db info from cluster_config.json, we will fetch it from NMA /nodes endpoint.
 	if vdb == nil {
 		vdb = new(VCoordinationDatabase)
-		nmaGetNodesInfoOp := makeNMAGetNodesInfoOp(options.Hosts, *options.DBName, *options.CatalogPrefix, vdb)
+		nmaGetNodesInfoOp := makeNMAGetNodesInfoOp(vcc.Log, options.Hosts, *options.DBName, *options.CatalogPrefix, vdb)
 		instructions = append(instructions, &nmaGetNodesInfoOp)
 	}
 
 	// vdb here should contains only primary nodes
-	nmaReadCatalogEditorOp, err := makeNMAReadCatalogEditorOp(vdb)
+	nmaReadCatalogEditorOp, err := makeNMAReadCatalogEditorOp(vcc.Log, vdb)
 	if err != nil {
 		return instructions, err
 	}
 	instructions = append(instructions, &nmaReadCatalogEditorOp)
 
+	if enabled, keyType := options.isSpreadEncryptionEnabled(); enabled {
+		instructions = append(instructions,
+			vcc.setOrRotateEncryptionKey(keyType),
+		)
+	}
+
 	// sourceConfHost is set to nil value in upload and download step
 	// we use information from catalog editor operation to update the sourceConfHost value
 	// after we find host with the highest catalog and hosts that need to synchronize the catalog
 	// we will remove the nil parameters in VER-88401 by adding them in execContext
-	produceTransferConfigOps(&instructions,
+	produceTransferConfigOps(vcc.Log,
+		&instructions,
 		nil, /*source hosts for transferring configuration files*/
 		options.Hosts,
 		nil /*db configurations retrieved from a running db*/)
 
-	nmaStartNewNodesOp := makeNMAStartNodeOp(options.Hosts)
-	httpsPollNodeStateOp, err := makeHTTPSPollNodeStateOpWithTimeout(options.Hosts,
-		options.usePassword, *options.UserName, options.Password, options.StatePollingTimeout)
+	nmaStartNewNodesOp := makeNMAStartNodeOp(vcc.Log, options.Hosts)
+	httpsPollNodeStateOp, err := makeHTTPSPollNodeStateOpWithTimeoutAndCommand(vcc.Log, options.Hosts,
+		options.usePassword, *options.UserName, options.Password, options.StatePollingTimeout, StartDBCmd)
 	if err != nil {
 		return instructions, err
 	}
@@ -237,7 +247,7 @@ func (vcc *VClusterCommands) produceStartDBInstructions(options *VStartDatabaseO
 	)
 
 	if options.IsEon.ToBool() {
-		httpsSyncCatalogOp, err := makeHTTPSSyncCatalogOp(options.Hosts, true, *options.UserName, options.Password)
+		httpsSyncCatalogOp, err := makeHTTPSSyncCatalogOp(vcc.Log, options.Hosts, true, *options.UserName, options.Password)
 		if err != nil {
 			return instructions, err
 		}
@@ -245,4 +255,10 @@ func (vcc *VClusterCommands) produceStartDBInstructions(options *VStartDatabaseO
 	}
 
 	return instructions, nil
+}
+
+func (vcc *VClusterCommands) setOrRotateEncryptionKey(keyType string) ClusterOp {
+	vcc.Log.Info("adding instruction to set or rotate the key for spread encryption")
+	op := makeNMASpreadSecurityOp(vcc.Log, keyType)
+	return &op
 }

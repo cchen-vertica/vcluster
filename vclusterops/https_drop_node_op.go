@@ -19,6 +19,7 @@ import (
 	"errors"
 
 	"github.com/vertica/vcluster/vclusterops/util"
+	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 type HTTPSDropNodeOp struct {
@@ -28,7 +29,7 @@ type HTTPSDropNodeOp struct {
 	RequestParams map[string]string
 }
 
-func makeHTTPSDropNodeOp(vnode string,
+func makeHTTPSDropNodeOp(log vlog.Printer, vnode string,
 	initiatorHost []string,
 	useHTTPPassword bool,
 	userName string,
@@ -36,6 +37,7 @@ func makeHTTPSDropNodeOp(vnode string,
 	isEon bool) (HTTPSDropNodeOp, error) {
 	dropNodeOp := HTTPSDropNodeOp{}
 	dropNodeOp.name = "HTTPSDropNodeOp"
+	dropNodeOp.log = log.WithName(dropNodeOp.name)
 	dropNodeOp.hosts = initiatorHost
 	dropNodeOp.targetHost = vnode
 	dropNodeOp.useHTTPPassword = useHTTPPassword
@@ -55,14 +57,10 @@ func makeHTTPSDropNodeOp(vnode string,
 }
 
 func (op *HTTPSDropNodeOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildHTTPSEndpoint("nodes/" + op.targetHost + "/drop")
+		httpRequest.buildHTTPSEndpoint("nodes/" + op.targetHost + "/drop")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -74,7 +72,7 @@ func (op *HTTPSDropNodeOp) setupClusterHTTPRequest(hosts []string) error {
 }
 
 func (op *HTTPSDropNodeOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
@@ -92,7 +90,7 @@ func (op *HTTPSDropNodeOp) processResult(_ *OpEngineExecContext) error {
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
-		if !result.IsSuccess() {
+		if !result.isSuccess() {
 			allErrs = errors.Join(allErrs, result.err)
 			continue
 		}

@@ -37,12 +37,12 @@ type HTTPSCerts struct {
 	caCert string
 }
 
-func (req *HostHTTPRequest) BuildNMAEndpoint(url string) {
+func (req *HostHTTPRequest) buildNMAEndpoint(url string) {
 	req.IsNMACommand = true
 	req.Endpoint = NMACurVersion + url
 }
 
-func (req *HostHTTPRequest) BuildHTTPSEndpoint(url string) {
+func (req *HostHTTPRequest) buildHTTPSEndpoint(url string) {
 	req.IsNMACommand = false
 	req.Endpoint = HTTPCurVersion + url
 }
@@ -52,4 +52,5 @@ type ClusterHTTPRequest struct {
 	RequestCollection map[string]HostHTTPRequest
 	ResultCollection  map[string]HostHTTPResult
 	SemVar            SemVer
+	Name              string
 }

@@ -31,11 +31,12 @@ type httpsGetNodesInfoOp struct {
 	vdb    *VCoordinationDatabase
 }
 
-func makeHTTPSGetNodesInfoOp(dbName string, hosts []string,
+func makeHTTPSGetNodesInfoOp(log vlog.Printer, dbName string, hosts []string,
 	useHTTPPassword bool, userName string, httpsPassword *string, vdb *VCoordinationDatabase,
 ) (httpsGetNodesInfoOp, error) {
 	op := httpsGetNodesInfoOp{}
 	op.name = "HTTPSGetNodeInfoOp"
+	op.log = log.WithName(op.name)
 	op.dbName = dbName
 	op.hosts = hosts
 	op.vdb = vdb
@@ -47,14 +48,10 @@ func makeHTTPSGetNodesInfoOp(dbName string, hosts []string,
 }
 
 func (op *httpsGetNodesInfoOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = GetMethod
-		httpRequest.BuildHTTPSEndpoint("nodes")
+		httpRequest.buildHTTPSEndpoint("nodes")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -67,7 +64,7 @@ func (op *httpsGetNodesInfoOp) setupClusterHTTPRequest(hosts []string) error {
 }
 
 func (op *httpsGetNodesInfoOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
@@ -85,7 +82,7 @@ func (op *httpsGetNodesInfoOp) processResult(_ *OpEngineExecContext) error {
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
-		if result.IsUnauthorizedRequest() {
+		if result.isUnauthorizedRequest() {
 			return fmt.Errorf("[%s] wrong password/certificate for https service on host %s",
 				op.name, host)
 		}
@@ -100,14 +97,14 @@ func (op *httpsGetNodesInfoOp) processResult(_ *OpEngineExecContext) error {
 			}
 			// save nodes info to vdb
 			op.vdb.HostNodeMap = makeVHostNodeMap()
+			op.vdb.HostList = []string{}
 			for _, node := range nodesStateInfo.NodeList {
 				if node.Database != op.dbName {
 					err = fmt.Errorf(`[%s] database %s is running on host %s, rather than database %s`, op.name, node.Database, host, op.dbName)
 					allErrs = errors.Join(allErrs, err)
 					return appendHTTPSFailureError(allErrs)
 				}
-				op.vdb.HostList = append(op.vdb.HostList, node.Address)
-				vNode := MakeVCoordinationNode()
+				vNode := makeVCoordinationNode()
 				vNode.Name = node.Name
 				vNode.Address = node.Address
 				vNode.CatalogPath = node.CatalogPath
@@ -117,13 +114,17 @@ func (op *httpsGetNodesInfoOp) processResult(_ *OpEngineExecContext) error {
 				if node.IsPrimary && node.State == util.NodeUpState {
 					op.vdb.PrimaryUpNodes = append(op.vdb.PrimaryUpNodes, node.Address)
 				}
-				op.vdb.HostNodeMap[node.Address] = &vNode
+				err := op.vdb.addNode(&vNode)
+				if err != nil {
+					allErrs = errors.Join(allErrs, err)
+					return appendHTTPSFailureError(allErrs)
+				}
 				// extract catalog prefix from node's catalog path
 				// catalog prefix is preceding db name
 				dbPath := "/" + node.Database
 				index := strings.Index(node.CatalogPath, dbPath)
 				if index == -1 {
-					vlog.LogPrintWarning("[%s] failed to get catalog prefix because catalog path %s does not contain database name %s",
+					op.log.PrintWarning("[%s] failed to get catalog prefix because catalog path %s does not contain database name %s",
 						op.name, node.CatalogPath, node.Database)
 				}
 				op.vdb.CatalogPrefix = node.CatalogPath[:index]

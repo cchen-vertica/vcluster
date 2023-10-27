@@ -95,36 +95,36 @@ const respSuccStatusCode = 0
 // 3. The local node has not yet joined the cluster; the HTTP server will accept connections once the node joins the cluster.
 // HTTPCheckDBRunningOp in create_db need to check all scenarios to see any HTTP running
 // For HTTPSPollNodeStateOp in start_db, it requires only handling the first and second scenarios
-func (hostResult *HostHTTPResult) IsUnauthorizedRequest() bool {
+func (hostResult *HostHTTPResult) isUnauthorizedRequest() bool {
 	return hostResult.statusCode == UnauthorizedCode
 }
 
-// IsSuccess returns true if status code is 200
-func (hostResult *HostHTTPResult) IsSuccess() bool {
+// isSuccess returns true if status code is 200
+func (hostResult *HostHTTPResult) isSuccess() bool {
 	return hostResult.statusCode == SuccessCode
 }
 
 // check only password and certificate for start_db
-func (hostResult *HostHTTPResult) IsPasswordAndCertificateError() bool {
-	if !hostResult.IsUnauthorizedRequest() {
+func (hostResult *HostHTTPResult) isPasswordAndCertificateError(log vlog.Printer) bool {
+	if !hostResult.isUnauthorizedRequest() {
 		return false
 	}
 	resultString := fmt.Sprintf("%v", hostResult)
 	for _, msg := range wrongCredentialErrMsg {
 		if strings.Contains(resultString, msg) {
-			vlog.LogError("the user has provided %s", msg)
+			log.Error(errors.New(msg), "the user has provided")
 			return true
 		}
 	}
 	return false
 }
 
-func (hostResult *HostHTTPResult) IsInternalError() bool {
+func (hostResult *HostHTTPResult) isInternalError() bool {
 	return hostResult.statusCode == InternalErrorCode
 }
 
-func (hostResult *HostHTTPResult) IsHTTPRunning() bool {
-	if hostResult.isPassing() || hostResult.IsUnauthorizedRequest() || hostResult.IsInternalError() {
+func (hostResult *HostHTTPResult) isHTTPRunning() bool {
+	if hostResult.isPassing() || hostResult.isUnauthorizedRequest() || hostResult.isInternalError() {
 		return true
 	}
 	return false
@@ -170,7 +170,6 @@ func (status ResultStatus) getStatusString() string {
 // log* implemented by embedding OpBase, but overrideable
 type ClusterOp interface {
 	getName() string
-	setupClusterHTTPRequest(hosts []string) error
 	prepare(execContext *OpEngineExecContext) error
 	execute(execContext *OpEngineExecContext) error
 	finalize(execContext *OpEngineExecContext) error
@@ -179,6 +178,7 @@ type ClusterOp interface {
 	logPrepare()
 	logExecute()
 	logFinalize()
+	setupBasicInfo()
 	loadCertsIfNeeded(certs *HTTPSCerts, findCertsInOptions bool) error
 	isSkipExecute() bool
 }
@@ -203,13 +203,12 @@ func (op *OpBase) getName() string {
 }
 
 func (op *OpBase) parseAndCheckResponse(host, responseContent string, responseObj any) error {
-	err := util.GetJSONLogErrors(responseContent, &responseObj, op.name)
+	err := util.GetJSONLogErrors(responseContent, &responseObj, op.name, op.log)
 	if err != nil {
-		vlog.LogError("[%s] fail to parse response on host %s, detail: %s", op.name, host, err)
+		op.log.Error(err, "fail to parse response on host, detail", "host", host)
 		return err
 	}
-	vlog.LogInfo("[%s] JSON response from %s is %+v\n", op.name, host, responseObj)
-
+	op.log.Info("JSON response", "host", host, "responseObj", responseObj)
 	return nil
 }
 
@@ -220,33 +219,43 @@ func (op *OpBase) parseAndCheckMapResponse(host, responseContent string) (OpResp
 	return responseObj, err
 }
 
+func (op *OpBase) setClusterHTTPRequestName() {
+	op.clusterHTTPRequest.Name = op.name
+}
+
 func (op *OpBase) setVersionToSemVar() {
 	op.clusterHTTPRequest.SemVar = SemVer{Ver: "1.0.0"}
 }
 
-// TODO: implement another parse function for list response
+func (op *OpBase) setupBasicInfo() {
+	op.clusterHTTPRequest = ClusterHTTPRequest{}
+	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
+	op.setClusterHTTPRequestName()
+	op.setVersionToSemVar()
+}
 
 func (op *OpBase) logResponse(host string, result HostHTTPResult) {
-	vlog.LogPrintInfo("[%s] result from host %s summary %s, details: %+v",
+	op.log.PrintInfo("[%s] result from host %s summary %s, details: %+v",
 		op.name, host, result.status.getStatusString(), result)
 }
 
 func (op *OpBase) logPrepare() {
-	vlog.LogInfo("[%s] Prepare() called\n", op.name)
+	op.log.Info("Prepare() called", "name", op.name)
 }
 
 func (op *OpBase) logExecute() {
-	vlog.LogInfo("[%s] Execute() called\n", op.name)
+	op.log.Info("Execute() called", "name", op.name)
+	op.log.PrintInfo("[%s] is running", op.name)
 }
 
 func (op *OpBase) logFinalize() {
-	vlog.LogInfo("[%s] Finalize() called\n", op.name)
+	op.log.Info("Finalize() called", "name", op.name)
 }
 
 func (op *OpBase) runExecute(execContext *OpEngineExecContext) error {
 	err := execContext.dispatcher.sendRequest(&op.clusterHTTPRequest)
 	if err != nil {
-		vlog.LogError("Fail to dispatch request %v", op.clusterHTTPRequest)
+		op.log.Error(err, "Fail to dispatch request, detail", "dispatch request", op.clusterHTTPRequest)
 		return err
 	}
 	return nil
@@ -288,7 +297,7 @@ func (op *OpBase) isSkipExecute() bool {
 func (op *OpBase) hasQuorum(hostCount, primaryNodeCount uint) bool {
 	quorumCount := (primaryNodeCount + 1) / 2
 	if hostCount < quorumCount {
-		vlog.LogPrintError("[%s] Quorum check failed: "+
+		op.log.PrintError("[%s] Quorum check failed: "+
 			"number of hosts with latest catalog (%d) is not "+
 			"greater than or equal to 1/2 of number of the primary nodes (%d)\n",
 			op.name, hostCount, primaryNodeCount)
@@ -302,7 +311,7 @@ func (op *OpBase) hasQuorum(hostCount, primaryNodeCount uint) bool {
 func (op *OpBase) checkResponseStatusCode(resp httpsResponseStatus, host string) (err error) {
 	if resp.StatusCode != respSuccStatusCode {
 		err = fmt.Errorf(`[%s] fail to execute HTTPS request on host %s, status code in HTTPS response is %d`, op.name, host, resp.StatusCode)
-		vlog.LogError(err.Error())
+		op.log.Error(err, "fail to execute HTTPS request, detail")
 		return err
 	}
 	return nil
@@ -311,17 +320,30 @@ func (op *OpBase) checkResponseStatusCode(resp httpsResponseStatus, host string)
 /* Sensitive fields in request body
  */
 type SensitiveFields struct {
-	DBPassword         string `json:"db_password"`
-	AWSAccessKeyID     string `json:"aws_access_key_id"`
-	AWSSecretAccessKey string `json:"aws_secret_access_key"`
+	DBPassword         string            `json:"db_password"`
+	AWSAccessKeyID     string            `json:"aws_access_key_id"`
+	AWSSecretAccessKey string            `json:"aws_secret_access_key"`
+	Parameters         map[string]string `json:"parameters"`
 }
 
 func (maskedData *SensitiveFields) maskSensitiveInfo() {
 	const maskedValue = "******"
-
+	sensitiveKeyParams := map[string]bool{
+		"awsauth":                 true,
+		"awssessiontoken":         true,
+		"gcsauth":                 true,
+		"azurestoragecredentials": true,
+	}
 	maskedData.DBPassword = maskedValue
 	maskedData.AWSAccessKeyID = maskedValue
 	maskedData.AWSSecretAccessKey = maskedValue
+	for key := range maskedData.Parameters {
+		// Mask the value if the keys are credentials
+		keyLowerCase := strings.ToLower(key)
+		if sensitiveKeyParams[keyLowerCase] {
+			maskedData.Parameters[key] = maskedValue
+		}
+	}
 }
 
 /* Cluster HTTPS ops basic fields

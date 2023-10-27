@@ -42,14 +42,10 @@ func makeNMAVerticaVersionOp(log vlog.Printer, hosts []string, sameVersion bool)
 }
 
 func (op *NMAVerticaVersionOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = GetMethod
-		httpRequest.BuildNMAEndpoint("vertica/version")
+		httpRequest.buildNMAEndpoint("vertica/version")
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
 	}
 
@@ -57,7 +53,7 @@ func (op *NMAVerticaVersionOp) setupClusterHTTPRequest(hosts []string) error {
 }
 
 func (op *NMAVerticaVersionOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
@@ -81,7 +77,7 @@ func (op *NMAVerticaVersionOp) parseAndCheckResponse(host, resultContent string)
 	// example result:
 	// {"vertica_version": "Vertica Analytic Database v12.0.3"}
 	var responseObj NMAVerticaVersionOpResponse
-	err := util.GetJSONLogErrors(resultContent, &responseObj, op.name)
+	err := util.GetJSONLogErrors(resultContent, &responseObj, op.name, op.log)
 	if err != nil {
 		return err
 	}

@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
+	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 type HTTPSReloadSpreadOp struct {
@@ -27,11 +28,12 @@ type HTTPSReloadSpreadOp struct {
 	OpHTTPSBase
 }
 
-func makeHTTPSReloadSpreadOpWithInitiator(initHosts []string,
+func makeHTTPSReloadSpreadOpWithInitiator(log vlog.Printer, initHosts []string,
 	useHTTPPassword bool,
 	userName string, httpsPassword *string) (HTTPSReloadSpreadOp, error) {
 	httpsReloadSpreadOp := HTTPSReloadSpreadOp{}
 	httpsReloadSpreadOp.name = "HTTPSReloadSpreadOp"
+	httpsReloadSpreadOp.log = log.WithName(httpsReloadSpreadOp.name)
 	httpsReloadSpreadOp.hosts = initHosts
 	httpsReloadSpreadOp.useHTTPPassword = useHTTPPassword
 
@@ -44,20 +46,16 @@ func makeHTTPSReloadSpreadOpWithInitiator(initHosts []string,
 	return httpsReloadSpreadOp, nil
 }
 
-func makeHTTPSReloadSpreadOp(useHTTPPassword bool,
+func makeHTTPSReloadSpreadOp(log vlog.Printer, useHTTPPassword bool,
 	userName string, httpsPassword *string) (HTTPSReloadSpreadOp, error) {
-	return makeHTTPSReloadSpreadOpWithInitiator(nil, useHTTPPassword, userName, httpsPassword)
+	return makeHTTPSReloadSpreadOpWithInitiator(log, nil, useHTTPPassword, userName, httpsPassword)
 }
 
 func (op *HTTPSReloadSpreadOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildHTTPSEndpoint("config/spread/reload")
+		httpRequest.buildHTTPSEndpoint("config/spread/reload")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -73,7 +71,7 @@ func (op *HTTPSReloadSpreadOp) prepare(execContext *OpEngineExecContext) error {
 	if len(op.hosts) == 0 {
 		op.hosts = execContext.upHosts
 	}
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }

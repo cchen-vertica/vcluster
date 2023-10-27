@@ -25,12 +25,12 @@ import (
 
 type nmaLoadRemoteCatalogOp struct {
 	OpBase
-	hostRequestBodyMap        map[string]string
-	communalStorageParameters map[string]string
-	oldHosts                  []string
-	vdb                       *VCoordinationDatabase
-	timeout                   uint
-	primaryNodeCount          uint
+	hostRequestBodyMap      map[string]string
+	configurationParameters map[string]string
+	oldHosts                []string
+	vdb                     *VCoordinationDatabase
+	timeout                 uint
+	primaryNodeCount        uint
 }
 
 type loadRemoteCatalogRequestData struct {
@@ -46,13 +46,14 @@ type loadRemoteCatalogRequestData struct {
 	Parameters         map[string]string   `json:"parameters,omitempty"`
 }
 
-func makeNMALoadRemoteCatalogOp(oldHosts []string, communalStorageParameters map[string]string,
+func makeNMALoadRemoteCatalogOp(log vlog.Printer, oldHosts []string, configurationParameters map[string]string,
 	vdb *VCoordinationDatabase, timeout uint) nmaLoadRemoteCatalogOp {
 	op := nmaLoadRemoteCatalogOp{}
 	op.name = "NMALoadRemoteCatalogOp"
+	op.log = log.WithName(op.name)
 	op.hosts = vdb.HostList
 	op.oldHosts = oldHosts
-	op.communalStorageParameters = communalStorageParameters
+	op.configurationParameters = configurationParameters
 	op.vdb = vdb
 	op.timeout = timeout
 
@@ -96,7 +97,7 @@ func (op *nmaLoadRemoteCatalogOp) setupRequestBody(execContext *OpEngineExecCont
 		requestData.CatalogPath = vNode.CatalogPath
 		requestData.StorageLocations = vNode.StorageLocations
 		requestData.NodeAddresses = nodeAddresses
-		requestData.Parameters = op.communalStorageParameters
+		requestData.Parameters = op.configurationParameters
 
 		dataBytes, err := json.Marshal(requestData)
 		if err != nil {
@@ -110,14 +111,10 @@ func (op *nmaLoadRemoteCatalogOp) setupRequestBody(execContext *OpEngineExecCont
 }
 
 func (op *nmaLoadRemoteCatalogOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildNMAEndpoint("catalog/revive")
+		httpRequest.buildNMAEndpoint("catalog/revive")
 		httpRequest.RequestData = op.hostRequestBodyMap[host]
 		httpRequest.Timeout = int(op.timeout)
 
@@ -133,7 +130,7 @@ func (op *nmaLoadRemoteCatalogOp) prepare(execContext *OpEngineExecContext) erro
 		return err
 	}
 
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
@@ -183,7 +180,7 @@ func (op *nmaLoadRemoteCatalogOp) processResult(_ *OpEngineExecContext) error {
 	// quorum check
 	if !op.hasQuorum(successPrimaryNodeCount, op.primaryNodeCount) {
 		err := fmt.Errorf("[%s] fail to load catalog on enough primary nodes. Success count: %d", op.name, successPrimaryNodeCount)
-		vlog.LogError(err.Error())
+		op.log.Error(err, "fail to load catalog, detail")
 		allErrs = errors.Join(allErrs, err)
 		return allErrs
 	}

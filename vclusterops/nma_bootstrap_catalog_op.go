@@ -30,33 +30,35 @@ type NMABootstrapCatalogOp struct {
 }
 
 type bootstrapCatalogRequestData struct {
-	DBName             string            `json:"db_name"`
-	Host               string            `json:"host"`
-	NodeName           string            `json:"node_name"`
-	CatalogPath        string            `json:"catalog_path"`
-	StorageLocation    string            `json:"storage_location"`
-	PortNumber         int               `json:"port_number"`
-	Parameters         map[string]string `json:"parameters"`
-	ControlAddr        string            `json:"control_addr"`
-	BroadcastAddr      string            `json:"broadcast_addr"`
-	LicenseKey         string            `json:"license_key"`
-	ControlPort        string            `json:"spread_port"`
-	LargeCluster       int               `json:"large_cluster"`
-	NetworkingMode     string            `json:"networking_mode"`
-	SpreadLogging      bool              `json:"spread_logging"`
-	SpreadLoggingLevel int               `json:"spread_logging_level"`
-	Ipv6               bool              `json:"ipv6"`
-	NumShards          int               `json:"num_shards"`
-	CommunalStorageURL string            `json:"communal_storage"`
+	DBName             string `json:"db_name"`
+	Host               string `json:"host"`
+	NodeName           string `json:"node_name"`
+	CatalogPath        string `json:"catalog_path"`
+	StorageLocation    string `json:"storage_location"`
+	PortNumber         int    `json:"port_number"`
+	ControlAddr        string `json:"control_addr"`
+	BroadcastAddr      string `json:"broadcast_addr"`
+	LicenseKey         string `json:"license_key"`
+	ControlPort        string `json:"spread_port"`
+	LargeCluster       int    `json:"large_cluster"`
+	NetworkingMode     string `json:"networking_mode"`
+	SpreadLogging      bool   `json:"spread_logging"`
+	SpreadLoggingLevel int    `json:"spread_logging_level"`
+	Ipv6               bool   `json:"ipv6"`
+	NumShards          int    `json:"num_shards"`
+	CommunalStorageURL string `json:"communal_storage"`
+	SuperuserName      string `json:"superuser_name"`
 	SensitiveFields
 }
 
 func makeNMABootstrapCatalogOp(
+	log vlog.Printer,
 	vdb *VCoordinationDatabase,
 	options *VCreateDatabaseOptions,
 	bootstrapHosts []string) (NMABootstrapCatalogOp, error) {
 	nmaBootstrapCatalogOp := NMABootstrapCatalogOp{}
 	nmaBootstrapCatalogOp.name = "NMABootstrapCatalogOp"
+	nmaBootstrapCatalogOp.log = log.WithName(nmaBootstrapCatalogOp.name)
 	// usually, only one node need bootstrap catalog
 	nmaBootstrapCatalogOp.hosts = bootstrapHosts
 
@@ -103,6 +105,7 @@ func (op *NMABootstrapCatalogOp) setupRequestBody(vdb *VCoordinationDatabase, op
 		bootstrapData.SpreadLogging = *options.SpreadLogging
 		bootstrapData.SpreadLoggingLevel = *options.SpreadLoggingLevel
 		bootstrapData.Ipv6 = options.Ipv6.ToBool()
+		bootstrapData.SuperuserName = *options.UserName
 		bootstrapData.DBPassword = *options.Password
 
 		// Eon params
@@ -129,7 +132,7 @@ func (op *NMABootstrapCatalogOp) updateRequestBody(execContext *OpEngineExecCont
 
 		dataBytes, err := json.Marshal(op.hostRequestBodyMap[host])
 		if err != nil {
-			vlog.LogError(`[%s] fail to marshal request data to JSON string, detail %s`, op.name, err)
+			op.log.Error(err, `[%s] fail to marshal request data to JSON string`, op.name)
 			return err
 		}
 		op.marshaledRequestBodyMap[host] = string(dataBytes)
@@ -139,21 +142,17 @@ func (op *NMABootstrapCatalogOp) updateRequestBody(execContext *OpEngineExecCont
 		maskedData.maskSensitiveInfo()
 		maskedRequestBodyMap[host] = maskedData
 	}
-	vlog.LogInfo("[%s] request data: %+v\n", op.name, maskedRequestBodyMap)
+	op.log.Info("request data", "op name", op.name, "bodyMap", maskedRequestBodyMap)
 
 	return nil
 }
 
 func (op *NMABootstrapCatalogOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
 	// usually, only one node need bootstrap catalog
 	for _, host := range hosts {
 		httpRequest := HostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildNMAEndpoint("catalog/bootstrap")
+		httpRequest.buildNMAEndpoint("catalog/bootstrap")
 		httpRequest.RequestData = op.marshaledRequestBodyMap[host]
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
 	}
@@ -167,7 +166,7 @@ func (op *NMABootstrapCatalogOp) prepare(execContext *OpEngineExecContext) error
 		return err
 	}
 
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }

@@ -20,7 +20,6 @@ import (
 	"sort"
 
 	"github.com/vertica/vcluster/vclusterops/util"
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 type VReviveDatabaseOptions struct {
@@ -43,7 +42,7 @@ func VReviveDBOptionsFactory() VReviveDatabaseOptions {
 }
 
 func (options *VReviveDatabaseOptions) setDefaultValues() {
-	options.DatabaseOptions.SetDefaultValues()
+	options.DatabaseOptions.setDefaultValues()
 
 	// set default values for revive db options
 	options.LoadCatalogTimeout = new(uint)
@@ -93,7 +92,7 @@ func (options *VReviveDatabaseOptions) analyzeOptions() (err error) {
 	return nil
 }
 
-func (options *VReviveDatabaseOptions) ValidateAnalyzeOptions() error {
+func (options *VReviveDatabaseOptions) validateAnalyzeOptions() error {
 	if err := options.validateParseOptions(); err != nil {
 		return err
 	}
@@ -109,28 +108,26 @@ func (vcc *VClusterCommands) VReviveDatabase(options *VReviveDatabaseOptions) (d
 	 */
 
 	// validate and analyze options
-	err = options.ValidateAnalyzeOptions()
+	err = options.validateAnalyzeOptions()
 	if err != nil {
 		return dbInfo, err
 	}
 
-	vdb := MakeVCoordinationDatabase()
+	vdb := makeVCoordinationDatabase()
 
 	// part 1: produce instructions for getting terminated database info, and save the info to vdb
 	preReviveDBInstructions, err := vcc.producePreReviveDBInstructions(options, &vdb)
 	if err != nil {
-		vlog.LogPrintError("fail to produce pre-revive database instructions %v", err)
-		return dbInfo, err
+		return dbInfo, fmt.Errorf("fail to produce pre-revive database instructions %w", err)
 	}
 
 	// generate clusterOpEngine certs
 	certs := HTTPSCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
 	// feed the pre-revive db instructions to the VClusterOpEngine
-	clusterOpEngine := MakeClusterOpEngine(preReviveDBInstructions, &certs)
-	err = clusterOpEngine.Run()
+	clusterOpEngine := makeClusterOpEngine(preReviveDBInstructions, &certs)
+	err = clusterOpEngine.run(vcc.Log)
 	if err != nil {
-		vlog.LogPrintError("fail to collect the information of database in revive_db %v", err)
-		return dbInfo, err
+		return dbInfo, fmt.Errorf("fail to collect the information of database in revive_db %w", err)
 	}
 
 	if *options.DisplayOnly {
@@ -139,18 +136,16 @@ func (vcc *VClusterCommands) VReviveDatabase(options *VReviveDatabaseOptions) (d
 	}
 
 	// part 2: produce instructions for reviving database using terminated database info
-	reviveDBInstructions, err := produceReviveDBInstructions(options, &vdb)
+	reviveDBInstructions, err := vcc.produceReviveDBInstructions(options, &vdb)
 	if err != nil {
-		vlog.LogPrintError("fail to produce revive database instructions %v", err)
-		return dbInfo, err
+		return dbInfo, fmt.Errorf("fail to produce revive database instructions %w", err)
 	}
 
 	// feed revive db instructions to the VClusterOpEngine
-	clusterOpEngine = MakeClusterOpEngine(reviveDBInstructions, &certs)
-	err = clusterOpEngine.Run()
+	clusterOpEngine = makeClusterOpEngine(reviveDBInstructions, &certs)
+	err = clusterOpEngine.run(vcc.Log)
 	if err != nil {
-		vlog.LogPrintError("fail to revive database %v", err)
-		return dbInfo, err
+		return dbInfo, fmt.Errorf("fail to revive database %w", err)
 	}
 	return dbInfo, nil
 }
@@ -171,7 +166,7 @@ func (vcc *VClusterCommands) producePreReviveDBInstructions(options *VReviveData
 	vdb *VCoordinationDatabase) ([]ClusterOp, error) {
 	var instructions []ClusterOp
 
-	nmaHealthOp := makeNMAHealthOp(options.Hosts)
+	nmaHealthOp := makeNMAHealthOp(vcc.Log, options.Hosts)
 	nmaVerticaVersionOp := makeNMAVerticaVersionOp(vcc.Log, options.Hosts, true)
 
 	checkDBRunningOp, err := makeHTTPCheckRunningDBOp(vcc.Log, options.Hosts, false, /*use password auth*/
@@ -182,8 +177,8 @@ func (vcc *VClusterCommands) producePreReviveDBInstructions(options *VReviveData
 
 	// use description file path as source file path
 	sourceFilePath := options.getDescriptionFilePath()
-	nmaDownLoadFileOp, err := makeNMADownloadFileOpForRevive(options.Hosts, sourceFilePath, destinationFilePath, catalogPath,
-		options.CommunalStorageParameters, vdb, *options.DisplayOnly, *options.IgnoreClusterLease)
+	nmaDownLoadFileOp, err := makeNMADownloadFileOpForRevive(vcc.Log, options.Hosts, sourceFilePath, destinationFilePath, catalogPath,
+		options.ConfigurationParameters, vdb, *options.DisplayOnly, *options.IgnoreClusterLease)
 	if err != nil {
 		return instructions, err
 	}
@@ -203,7 +198,7 @@ func (vcc *VClusterCommands) producePreReviveDBInstructions(options *VReviveData
 //   - Prepare database directories for all the hosts
 //   - Get network profiles for all the hosts
 //   - Load remote catalog from communal storage on all the hosts
-func produceReviveDBInstructions(options *VReviveDatabaseOptions, vdb *VCoordinationDatabase) ([]ClusterOp, error) {
+func (vcc *VClusterCommands) produceReviveDBInstructions(options *VReviveDatabaseOptions, vdb *VCoordinationDatabase) ([]ClusterOp, error) {
 	var instructions []ClusterOp
 
 	newVDB, oldHosts, err := options.generateReviveVDB(vdb)
@@ -232,14 +227,15 @@ func produceReviveDBInstructions(options *VReviveDatabaseOptions, vdb *VCoordina
 		hostNodeMap[host] = vnode
 	}
 	// prepare all directories
-	nmaPrepareDirectoriesOp, err := makeNMAPrepareDirectoriesOp(hostNodeMap, *options.ForceRemoval, true /*for db revive*/)
+	nmaPrepareDirectoriesOp, err := makeNMAPrepareDirectoriesOp(vcc.Log, hostNodeMap, *options.ForceRemoval, true /*for db revive*/)
 	if err != nil {
 		return instructions, err
 	}
 
-	nmaNetworkProfileOp := makeNMANetworkProfileOp(options.Hosts)
+	nmaNetworkProfileOp := makeNMANetworkProfileOp(vcc.Log, options.Hosts)
 
-	nmaLoadRemoteCatalogOp := makeNMALoadRemoteCatalogOp(oldHosts, options.CommunalStorageParameters, &newVDB, *options.LoadCatalogTimeout)
+	nmaLoadRemoteCatalogOp := makeNMALoadRemoteCatalogOp(vcc.Log, oldHosts, options.ConfigurationParameters,
+		&newVDB, *options.LoadCatalogTimeout)
 
 	instructions = append(instructions,
 		&nmaPrepareDirectoriesOp,
@@ -253,7 +249,7 @@ func produceReviveDBInstructions(options *VReviveDatabaseOptions, vdb *VCoordina
 // generateReviveVDB can create new vdb, and line up old hosts and vnodes with new hosts' order(user input order)
 func (options *VReviveDatabaseOptions) generateReviveVDB(vdb *VCoordinationDatabase) (newVDB VCoordinationDatabase,
 	oldHosts []string, err error) {
-	newVDB = MakeVCoordinationDatabase()
+	newVDB = makeVCoordinationDatabase()
 	newVDB.Name = *options.DBName
 	newVDB.CommunalStorageLocation = *options.CommunalStorageLocation
 	// use new cluster hosts
