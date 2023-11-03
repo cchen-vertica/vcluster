@@ -138,7 +138,7 @@ func (vdb *VCoordinationDatabase) addNode(vnode *VCoordinationNode) error {
 
 // addHosts adds a given list of hosts to the VDB's HostList
 // and HostNodeMap.
-func (vdb *VCoordinationDatabase) addHosts(hosts []string) error {
+func (vdb *VCoordinationDatabase) addHosts(hosts []string, scName string) error {
 	totalHostCount := len(hosts) + len(vdb.HostList)
 	nodeNameToHost := vdb.genNodeNameToHostMap()
 	for _, host := range hosts {
@@ -149,8 +149,9 @@ func (vdb *VCoordinationDatabase) addHosts(hosts []string) error {
 		}
 		nodeNameToHost[name] = host
 		nodeConfig := NodeConfig{
-			Address: host,
-			Name:    name,
+			Address:    host,
+			Name:       name,
+			Subcluster: scName,
 		}
 		vNode.setFromNodeConfig(&nodeConfig, vdb)
 		err := vdb.addNode(&vNode)
@@ -412,6 +413,7 @@ func (vnode *VCoordinationNode) setFromNodeConfig(nodeConfig *NodeConfig, vdb *V
 	// so we do not perform validation here
 	vnode.Address = nodeConfig.Address
 	vnode.Name = nodeConfig.Name
+	vnode.Subcluster = nodeConfig.Subcluster
 	vnode.CatalogPath = vdb.genCatalogPath(vnode.Name)
 	dataPath := vdb.genDataPath(vnode.Name)
 	vnode.StorageLocations = append(vnode.StorageLocations, dataPath)

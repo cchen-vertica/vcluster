@@ -176,8 +176,14 @@ func (op *HTTPCheckRunningDBOp) processResult(_ *OpEngineExecContext) error {
 		if !result.isHTTPRunning() {
 			resSummaryStr = FailureResult
 		}
-		op.log.PrintInfo("[%s] result from host %s summary %s, details: %+v.",
-			op.name, host, resSummaryStr, result)
+
+		if result.err != nil {
+			op.log.PrintInfo("[%s] result from host %s summary %s, error: %+v",
+				op.name, host, resSummaryStr, result.err)
+		} else {
+			op.log.PrintInfo("[%s] result from host %s summary %s, details: %+v.",
+				op.name, host, resSummaryStr, result)
+		}
 
 		if !result.isPassing() {
 			allErrs = errors.Join(allErrs, result.err)

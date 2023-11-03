@@ -110,7 +110,7 @@ func (opt *DatabaseOptions) validateBaseOptions(commandName string, log vlog.Pri
 	if *opt.DBName == "" {
 		return fmt.Errorf("must specify a database name")
 	}
-	err := util.ValidateName(*opt.DBName, "database")
+	err := util.ValidateDBName(*opt.DBName)
 	if err != nil {
 		return err
 	}
@@ -288,28 +288,10 @@ func (opt *DatabaseOptions) isEonMode(config *ClusterConfig) (bool, error) {
 
 // getNameAndHosts can choose the right dbName and hosts from user input and config file
 func (opt *DatabaseOptions) getNameAndHosts(config *ClusterConfig) (dbName string, hosts []string, err error) {
-	// when config file is not available, we use user input
-	// HonorUserInput must be true at this time, otherwise vcluster has stopped when it cannot find the config file
+	// DBName is now a required option with our without yaml config, so this function exists for legacy reasons
 	dbName = *opt.DBName
-
-	if config == nil {
-		return *opt.DBName, opt.Hosts, nil
-	}
-
-	dbConfig, ok := (*config)[dbName]
-	if !ok {
-		return dbName, hosts, cannotFindDBFromConfigErr(dbName)
-	}
-
-	hosts = dbConfig.getHosts()
-	// if HonorUserInput is set, we choose the user input
-	if *opt.DBName != "" && *opt.HonorUserInput {
-		dbName = *opt.DBName
-	}
-	if len(opt.Hosts) > 0 && *opt.HonorUserInput {
-		hosts = opt.Hosts
-	}
-	return dbName, hosts, nil
+	hosts, err = opt.getHosts(config)
+	return dbName, hosts, err
 }
 
 // getHosts chooses the right hosts from user input and config file
@@ -443,7 +425,8 @@ func (opt *DatabaseOptions) getVDBWhenDBIsDown(vcc *VClusterCommands) (vdb VCoor
 	vdb1 := VCoordinationDatabase{}
 	var instructions1 []ClusterOp
 	nmaHealthOp := makeNMAHealthOp(vcc.Log, opt.Hosts)
-	nmaGetNodesInfoOp := makeNMAGetNodesInfoOp(vcc.Log, opt.Hosts, *opt.DBName, *opt.CatalogPrefix, &vdb1)
+	nmaGetNodesInfoOp := makeNMAGetNodesInfoOp(vcc.Log, opt.Hosts, *opt.DBName, *opt.CatalogPrefix,
+		false /* report all errors */, &vdb1)
 	instructions1 = append(instructions1,
 		&nmaHealthOp,
 		&nmaGetNodesInfoOp,
@@ -525,4 +508,13 @@ func (opt *DatabaseOptions) isSpreadEncryptionEnabled() (enabled bool, encryptio
 		}
 	}
 	return false, ""
+}
+
+func (opt *DatabaseOptions) runClusterOpEngine(log vlog.Printer, instructions []ClusterOp) error {
+	// Create a VClusterOpEngine, and add certs to the engine
+	certs := HTTPSCerts{key: opt.Key, cert: opt.Cert, caCert: opt.CaCert}
+	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+
+	// Give the instructions to the VClusterOpEngine to run
+	return clusterOpEngine.run(log)
 }

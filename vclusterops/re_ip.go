@@ -29,12 +29,16 @@ type VReIPOptions struct {
 	DatabaseOptions
 
 	ReIPList []ReIPInfo
+
+	// hidden option
+	TrimReIPList bool
 }
 
 func VReIPFactory() VReIPOptions {
 	opt := VReIPOptions{}
 	// set default values to the params
 	opt.setDefaultValues()
+	opt.TrimReIPList = false
 
 	return opt
 }
@@ -160,7 +164,6 @@ func (vcc *VClusterCommands) VReIP(options *VReIPOptions) error {
 // The generated instructions will later perform the following operations necessary
 // for a successful re_ip:
 //   - Check NMA connectivity
-//   - Check Vertica versions
 //   - Read database info from catalog editor
 //     (now we should know which hosts have the latest catalog)
 //   - Run re-ip on the target nodes
@@ -174,7 +177,6 @@ func (vcc *VClusterCommands) produceReIPInstructions(options *VReIPOptions, vdb 
 	hosts := options.Hosts
 
 	nmaHealthOp := makeNMAHealthOp(vcc.Log, hosts)
-	nmaVerticaVersionOp := makeNMAVerticaVersionOp(vcc.Log, hosts, true)
 
 	// get network profiles of the new addresses
 	var newAddresses []string
@@ -185,7 +187,6 @@ func (vcc *VClusterCommands) produceReIPInstructions(options *VReIPOptions, vdb 
 
 	instructions = append(instructions,
 		&nmaHealthOp,
-		&nmaVerticaVersionOp,
 		&nmaNetworkProfileOp,
 	)
 
@@ -193,7 +194,8 @@ func (vcc *VClusterCommands) produceReIPInstructions(options *VReIPOptions, vdb 
 	// When we cannot get db info from cluster_config.json, we will fetch it from NMA /nodes endpoint.
 	if vdb == nil {
 		vdb = new(VCoordinationDatabase)
-		nmaGetNodesInfoOp := makeNMAGetNodesInfoOp(vcc.Log, options.Hosts, *options.DBName, *options.CatalogPrefix, vdb)
+		nmaGetNodesInfoOp := makeNMAGetNodesInfoOp(vcc.Log, options.Hosts, *options.DBName, *options.CatalogPrefix,
+			false /* report all errors */, vdb)
 		// read catalog editor to get hosts with latest catalog
 		nmaReadCatEdOp, err := makeNMAReadCatalogEditorOp(vcc.Log, vdb)
 		if err != nil {
@@ -218,7 +220,7 @@ func (vcc *VClusterCommands) produceReIPInstructions(options *VReIPOptions, vdb 
 	// re-ip
 	// at this stage the re-ip info should either by provided by
 	// the re-ip file (for vcluster CLI) or the Kubernetes operator
-	nmaReIPOP := makeNMAReIPOp(vcc.Log, options.ReIPList, vdb)
+	nmaReIPOP := makeNMAReIPOp(vcc.Log, options.ReIPList, vdb, options.TrimReIPList)
 
 	instructions = append(instructions, &nmaReIPOP)
 

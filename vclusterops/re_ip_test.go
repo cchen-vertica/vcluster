@@ -16,6 +16,7 @@
 package vclusterops
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -67,4 +68,37 @@ func TestReadReIPFile(t *testing.T) {
 	// ipv6 negative
 	err = opt.ReadReIPFile(currentDir + "/test_data/re_ip_v6_wrong.json")
 	assert.ErrorContains(t, err, "0:0:0:0:0:ffff:c0a8:016-6 in the re-ip file is not a valid IPv6 address")
+}
+
+func TestTrimReIPList(t *testing.T) {
+	// build a stub exec context
+	log := vlog.Printer{}
+	execContext := makeOpEngineExecContext(log)
+
+	// build a stub NmaVDatabase
+	nmaVDatabase := NmaVDatabase{}
+	for i := 0; i < 3; i++ {
+		vnode := NmaVNode{}
+		vnode.Address = fmt.Sprintf("vnode%d", i+1)
+		vnode.Name = fmt.Sprintf("v_%s_node000%d", dbName, i+1)
+		nmaVDatabase.Nodes = append(nmaVDatabase.Nodes, vnode)
+	}
+	execContext.nmaVDatabase = nmaVDatabase
+
+	// build a stub re-ip list
+	// which has an extra node compared to the actual NmaVDatabase
+	var op NMAReIPOp
+	for i := 0; i < 4; i++ {
+		var reIPInfo ReIPInfo
+		reIPInfo.NodeName = fmt.Sprintf("v_%s_node000%d", dbName, i+1)
+		reIPInfo.TargetAddress = fmt.Sprintf("vnode_new_%d", i+1)
+		op.reIPList = append(op.reIPList, reIPInfo)
+	}
+
+	// re-ip list before trimming
+	assert.Equal(t, len(op.reIPList), 4)
+
+	// re-ip list after trimming: the extra node is trimmed off
+	op.trimReIPList(&execContext)
+	assert.Equal(t, len(op.reIPList), 3)
 }

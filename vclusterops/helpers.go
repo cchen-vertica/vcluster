@@ -159,3 +159,18 @@ func getInitiator(hosts []string) string {
 func cannotFindDBFromConfigErr(dbName string) error {
 	return fmt.Errorf("database %s cannot be found in the config file", dbName)
 }
+
+// validates each host has an entry in each map
+func validateHostMaps(hosts []string, maps ...map[string]string) error {
+	var allErrors error
+	for _, strMap := range maps {
+		for _, host := range hosts {
+			val, ok := strMap[host]
+			if !ok || val == "" {
+				allErrors = errors.Join(allErrors,
+					fmt.Errorf("configuration map missing entry for host %s", host))
+			}
+		}
+	}
+	return allErrors
+}

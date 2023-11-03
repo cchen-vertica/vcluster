@@ -174,9 +174,9 @@ func (vcc *VClusterCommands) VStartDatabase(options *VStartDatabaseOptions) erro
 // The generated instructions will later perform the following operations necessary
 // for a successful start_db:
 //   - Check NMA connectivity
-//   - Check Vertica versions
 //   - Check to see if any dbs running
 //   - Use NMA /catalog/database to get the best source node for spread.conf and vertica.conf
+//   - Check Vertica versions
 //   - Sync the confs to the rest of nodes who have lower catalog version (results from the previous step)
 //   - Start all nodes of the database
 //   - Poll node startup
@@ -185,8 +185,6 @@ func (vcc *VClusterCommands) produceStartDBInstructions(options *VStartDatabaseO
 	var instructions []ClusterOp
 
 	nmaHealthOp := makeNMAHealthOp(vcc.Log, options.Hosts)
-	// require to have the same vertica version
-	nmaVerticaVersionOp := makeNMAVerticaVersionOp(vcc.Log, options.Hosts, true)
 	// need username for https operations
 	err := options.setUsePassword(vcc.Log)
 	if err != nil {
@@ -200,14 +198,14 @@ func (vcc *VClusterCommands) produceStartDBInstructions(options *VStartDatabaseO
 	}
 	instructions = append(instructions,
 		&nmaHealthOp,
-		&nmaVerticaVersionOp,
 		&checkDBRunningOp,
 	)
 
 	// When we cannot get db info from cluster_config.json, we will fetch it from NMA /nodes endpoint.
 	if vdb == nil {
 		vdb = new(VCoordinationDatabase)
-		nmaGetNodesInfoOp := makeNMAGetNodesInfoOp(vcc.Log, options.Hosts, *options.DBName, *options.CatalogPrefix, vdb)
+		nmaGetNodesInfoOp := makeNMAGetNodesInfoOp(vcc.Log, options.Hosts, *options.DBName, *options.CatalogPrefix,
+			false /* report all errors */, vdb)
 		instructions = append(instructions, &nmaGetNodesInfoOp)
 	}
 
@@ -216,7 +214,12 @@ func (vcc *VClusterCommands) produceStartDBInstructions(options *VStartDatabaseO
 	if err != nil {
 		return instructions, err
 	}
-	instructions = append(instructions, &nmaReadCatalogEditorOp)
+	// require to have the same vertica version
+	nmaVerticaVersionOp := makeNMAVerticaVersionOpWithoutHosts(vcc.Log, true)
+	instructions = append(instructions,
+		&nmaReadCatalogEditorOp,
+		&nmaVerticaVersionOp,
+	)
 
 	if enabled, keyType := options.isSpreadEncryptionEnabled(); enabled {
 		instructions = append(instructions,

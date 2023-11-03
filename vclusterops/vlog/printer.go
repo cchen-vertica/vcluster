@@ -39,7 +39,7 @@ const (
 type Printer struct {
 	Log           logr.Logger
 	LogToFileOnly bool
-	// ForCli can indicate if vclusterops is called from vcluster cli or other software
+	// ForCli can indicate if vclusterops is called from vcluster cli or other clients
 	ForCli bool
 }
 
@@ -143,9 +143,15 @@ func logMaskedArgParseHelper(inputArgv []string) (maskedPairs []string) {
 		maskedValue   = "******"
 	)
 	// We need to mask any parameters containing sensitive information
+	// with value format k=v,k=v,k=v...
 	targetMaskedArg := map[string]bool{
 		"--config-param": true,
 	}
+	// some params have simple value format v
+	targetMaskedSimpleArg := map[string]bool{
+		"--password": true,
+	}
+
 	for i := 0; i < len(inputArgv); i++ {
 		if targetMaskedArg[inputArgv[i]] && i+1 < len(inputArgv) {
 			pairs := strings.Split(inputArgv[i+1], ",")
@@ -164,6 +170,9 @@ func logMaskedArgParseHelper(inputArgv []string) (maskedPairs []string) {
 					maskedPairs = append(maskedPairs, pair)
 				}
 			}
+			i++ // Skip the next arg since it has been masked
+		} else if targetMaskedSimpleArg[inputArgv[i]] && i+1 < len(inputArgv) {
+			maskedPairs = append(maskedPairs, inputArgv[i], maskedValue)
 			i++ // Skip the next arg since it has been masked
 		} else {
 			maskedPairs = append(maskedPairs, inputArgv[i])

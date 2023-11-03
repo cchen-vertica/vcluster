@@ -159,7 +159,6 @@ func (vcc *VClusterCommands) VReviveDatabase(options *VReviveDatabaseOptions) (d
 // producePreReviveDBInstructions will build the first half of revive_db instructions
 // The generated instructions will later perform the following operations
 //   - Check NMA connectivity
-//   - Check NMA version
 //   - Check any DB running on the hosts
 //   - Download and read the description file from communal storage on the initiator
 func (vcc *VClusterCommands) producePreReviveDBInstructions(options *VReviveDatabaseOptions,
@@ -167,7 +166,6 @@ func (vcc *VClusterCommands) producePreReviveDBInstructions(options *VReviveData
 	var instructions []ClusterOp
 
 	nmaHealthOp := makeNMAHealthOp(vcc.Log, options.Hosts)
-	nmaVerticaVersionOp := makeNMAVerticaVersionOp(vcc.Log, options.Hosts, true)
 
 	checkDBRunningOp, err := makeHTTPCheckRunningDBOp(vcc.Log, options.Hosts, false, /*use password auth*/
 		"" /*username for https call*/, nil /*password for https call*/, ReviveDB)
@@ -185,7 +183,6 @@ func (vcc *VClusterCommands) producePreReviveDBInstructions(options *VReviveData
 
 	instructions = append(instructions,
 		&nmaHealthOp,
-		&nmaVerticaVersionOp,
 		&checkDBRunningOp,
 		&nmaDownLoadFileOp,
 	)

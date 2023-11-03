@@ -81,12 +81,13 @@ func (pool *AdapterPool) sendRequest(clusterHTTPRequest *ClusterHTTPRequest) err
 	// result channel to collect result from each host
 	resultChannel := make(chan HostHTTPResult, hostCount)
 
-	// use context to check whether a step has completed
+	// only track the progress of HTTP requests for vcluster CLI
 	if pool.log.ForCli {
-		ctx, cancel := context.WithCancel(context.Background())
-		go progressCheck(ctx, clusterHTTPRequest.Name, pool.log)
+		// use context to check whether a step has completed
+		ctx, cancelCtx := context.WithCancel(context.Background())
+		go progressCheck(ctx, clusterHTTPRequest.Name)
 		// cancel the progress check context when the result channel is closed
-		defer cancel()
+		defer cancelCtx()
 	}
 
 	for i := 0; i < len(adapterToRequestCollection); i++ {
@@ -114,7 +115,7 @@ func (pool *AdapterPool) sendRequest(clusterHTTPRequest *ClusterHTTPRequest) err
 
 // progressCheck checks whether a step (operation) has been completed.
 // Elapsed time of the step in seconds will be displayed.
-func progressCheck(ctx context.Context, name string, log vlog.Printer) {
+func progressCheck(ctx context.Context, name string) {
 	const progressCheckInterval = 5
 	startTime := time.Now()
 
@@ -130,7 +131,7 @@ func progressCheck(ctx context.Context, name string, log vlog.Printer) {
 			return
 		case tickTime := <-ticker.C:
 			elapsedTime := tickTime.Sub(startTime)
-			log.PrintInfo("[%s] is still running. %.f seconds spent at this step.",
+			fmt.Printf("[%s] is still running. %.f seconds spent at this step.\n",
 				name, elapsedTime.Seconds())
 		}
 	}
