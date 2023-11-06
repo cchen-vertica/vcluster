@@ -9,7 +9,7 @@ require (
 	github.com/tonglil/buflogr v1.0.1
 	go.uber.org/zap v1.25.0
 	golang.org/x/exp v0.0.0-20230510235704-dd950f8aeaea
-	golang.org/x/sys v0.13.0
+	golang.org/x/sys v0.8.0
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/apimachinery v0.26.2
 	k8s.io/client-go v0.26.2
