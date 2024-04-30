@@ -485,7 +485,6 @@ type ClusterCommands interface {
 	PrintError(msg string, v ...any)
 
 	VAddNode(options *VAddNodeOptions) (VCoordinationDatabase, error)
-	VStopNode(options *VStopNodeOptions) error
 	VAddSubcluster(options *VAddSubclusterOptions) error
 	VCreateDatabase(options *VCreateDatabaseOptions) (VCoordinationDatabase, error)
 	VDropDatabase(options *VDropDatabaseOptions) error
