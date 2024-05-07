@@ -116,12 +116,20 @@ func (vcc *VClusterCommands) unsandboxPreCheck(vdb *VCoordinationDatabase, optio
 	scFound := false
 	var sandboxedHosts []string
 
+	upHosts := []string{}
 	for _, vnode := range vdb.HostNodeMap {
 		if !scFound && vnode.Subcluster == options.SCName {
 			scFound = true
 		}
 
+		if vnode.State != util.NodeDownState {
+			upHosts = append(upHosts, vnode.Address)
+		}
 		if vnode.Subcluster == options.SCName {
+			// if the subcluster is not sandboxed, return error immediately
+			if vnode.Sandbox == "" {
+				return &SubclusterNotSandboxedError{SCName: options.SCName}
+			}
 			sandboxedHosts = append(sandboxedHosts, vnode.Address)
 			// when the node state is not "DOWN" ("UP" or "UNKNOWN"), we consider
 			// the node is running
@@ -130,6 +138,7 @@ func (vcc *VClusterCommands) unsandboxPreCheck(vdb *VCoordinationDatabase, optio
 			}
 		}
 	}
+	options.Hosts = upHosts
 
 	if !scFound {
 		vcc.Log.PrintError(`subcluster '%s' does not exist`, options.SCName)
