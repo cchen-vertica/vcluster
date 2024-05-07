@@ -112,7 +112,7 @@ type nodeStateInfo struct {
 }
 
 func (node *nodeStateInfo) asNodeInfo() (n NodeInfo, err error) {
-	n = node.asNodeInfoWoVer()
+	n = node.asNodeInfoWithoutVer()
 	// version can be, eg, v24.0.0-<revision> or v23.4.0-<hotfix|date>-<revision> including a hotfix or daily build date
 	verWithHotfix := 3
 	verWithoutHotfix := 2
@@ -126,14 +126,15 @@ func (node *nodeStateInfo) asNodeInfo() (n NodeInfo, err error) {
 	return
 }
 
-// asNodeInfoWoVer will create a NodeInfo with empty Version and Revision
-func (node *nodeStateInfo) asNodeInfoWoVer() (n NodeInfo) {
+// asNodeInfoWithoutVer will create a NodeInfo with empty Version and Revision
+func (node *nodeStateInfo) asNodeInfoWithoutVer() (n NodeInfo) {
 	n.Address = node.Address
 	n.Name = node.Name
 	n.State = node.State
 	n.CatalogPath = node.CatalogPath
 	n.Subcluster = node.Subcluster
 	n.IsPrimary = node.IsPrimary
+	n.Sandbox = node.Sandbox
 	return
 }
 
@@ -173,17 +174,26 @@ func (vcc VClusterCommands) getVDBFromRunningDBImpl(vdb *VCoordinationDatabase, 
 	httpsGetNodesInfoOp, err := makeHTTPSGetNodesInfoOp(options.DBName, options.Hosts,
 		options.usePassword, options.UserName, options.Password, vdb, allowUseSandboxRes, sandbox)
 	if err != nil {
-		return fmt.Errorf("fail to produce httpsGetNodesInfo instructions while retrieving database configurations, %w", err)
+		return fmt.Errorf("fail to produce httpsGetNodesInfo instruction while retrieving database configurations, %w", err)
 	}
 
 	httpsGetClusterInfoOp, err := makeHTTPSGetClusterInfoOp(options.DBName, options.Hosts,
 		options.usePassword, options.UserName, options.Password, vdb)
 	if err != nil {
-		return fmt.Errorf("fail to produce httpsGetClusterInfo instructions while retrieving database configurations, %w", err)
+		return fmt.Errorf("fail to produce httpsGetClusterInfo instruction while retrieving database configurations, %w", err)
 	}
 
 	var instructions []clusterOp
 	instructions = append(instructions, &httpsGetNodesInfoOp, &httpsGetClusterInfoOp)
+
+	// update node state for sandboxed nodes
+	if allowUseSandboxRes {
+		httpsUpdateNodeState, e := makeHTTPSUpdateNodeStateOp(vdb, options.usePassword, options.UserName, options.Password)
+		if e != nil {
+			return fmt.Errorf("fail to produce httpsUpdateNodeState instruction while updating node states, %w", e)
+		}
+		instructions = append(instructions, &httpsUpdateNodeState)
+	}
 
 	certs := httpsCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
 	clusterOpEngine := makeClusterOpEngine(instructions, &certs)

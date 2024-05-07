@@ -16,29 +16,27 @@
 package vclusterops
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
 )
 
-type httpsCheckNodeStateOp struct {
+type httpsUpdateNodeStateOp struct {
 	opBase
 	opHTTPSBase
+	vdb *VCoordinationDatabase
 }
 
-func makeHTTPSCheckNodeStateOp(hosts []string,
+func makeHTTPSUpdateNodeStateOp(vdb *VCoordinationDatabase,
 	useHTTPPassword bool,
 	userName string,
 	httpsPassword *string,
-) (httpsCheckNodeStateOp, error) {
-	op := httpsCheckNodeStateOp{}
-	op.name = "HTTPCheckNodeStateOp"
-	op.description = "Check node state from running database"
-	// The hosts are the ones we are going to talk to.
-	// They can be a subset of the actual host information that we return,
-	// as if any of the hosts is responsive, spread can give us the info of all nodes
-	op.hosts = hosts
+) (httpsUpdateNodeStateOp, error) {
+	op := httpsUpdateNodeStateOp{}
+	op.name = "HTTPSUpdateNodeStateOp"
+	op.description = "Update node state from running database"
+	op.hosts = vdb.HostList
+	op.vdb = vdb
 	op.useHTTPPassword = useHTTPPassword
 
 	err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
@@ -51,11 +49,11 @@ func makeHTTPSCheckNodeStateOp(hosts []string,
 	return op, nil
 }
 
-func (op *httpsCheckNodeStateOp) setupClusterHTTPRequest(hosts []string) error {
+func (op *httpsUpdateNodeStateOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
 		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = GetMethod
-		httpRequest.buildHTTPSEndpoint("nodes")
+		httpRequest.buildHTTPSEndpoint("nodes/" + host)
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -66,13 +64,13 @@ func (op *httpsCheckNodeStateOp) setupClusterHTTPRequest(hosts []string) error {
 	return nil
 }
 
-func (op *httpsCheckNodeStateOp) prepare(execContext *opEngineExecContext) error {
+func (op *httpsUpdateNodeStateOp) prepare(execContext *opEngineExecContext) error {
 	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *httpsCheckNodeStateOp) execute(execContext *opEngineExecContext) error {
+func (op *httpsUpdateNodeStateOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -80,10 +78,8 @@ func (op *httpsCheckNodeStateOp) execute(execContext *opEngineExecContext) error
 	return op.processResult(execContext)
 }
 
-func (op *httpsCheckNodeStateOp) processResult(execContext *opEngineExecContext) error {
-	var allErrs error
-	respondingNodeCount := 0
-
+func (op *httpsUpdateNodeStateOp) processResult(execContext *opEngineExecContext) error {
+	// VER-93706 may update the error handling in this function
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
@@ -92,46 +88,49 @@ func (op *httpsCheckNodeStateOp) processResult(execContext *opEngineExecContext)
 			execContext.hostsWithWrongAuth = append(execContext.hostsWithWrongAuth, host)
 			// return here because we assume that
 			// we will get the same error across other nodes
-			allErrs = errors.Join(allErrs, result.err)
-			return allErrs
+			return result.err
 		}
 
 		if !result.isPassing() {
-			// for any error, we continue to the next node
-			if result.isInternalError() {
-				op.logger.PrintError("[%s] internal error of the /nodes endpoint: %s", op.name, result.content)
-				// At internal error originated from the server, so its a
-				// response, just not a successful one.
-				respondingNodeCount++
+			// for failed request, we set the host's state to DOWN
+			// only if its current state is UNKNOWN
+			vnode, ok := op.vdb.HostNodeMap[host]
+			if !ok {
+				return fmt.Errorf("cannot find host %s in vdb", host)
 			}
-			allErrs = errors.Join(allErrs, result.err)
+			if vnode.State == util.NodeUnknownState {
+				vnode.State = util.NodeDownState
+			}
+
 			continue
 		}
 
-		// parse the /nodes endpoint response
-		respondingNodeCount++
-		nodesStates := nodesStateInfo{}
-		err := op.parseAndCheckResponse(host, result.content, &nodesStates)
+		// parse the /nodes/<host_ip> endpoint response
+		nodesInformation := nodesInfo{}
+		err := op.parseAndCheckResponse(host, result.content, &nodesInformation)
 		if err != nil {
-			err = fmt.Errorf("[%s] fail to parse result on host %s: %w",
+			return fmt.Errorf("[%s] fail to parse result on host %s: %w",
 				op.name, host, err)
-			allErrs = errors.Join(allErrs, err)
-			continue
 		}
 
-		nodesInfo := nodesInfo{}
-		for _, node := range nodesStates.NodeList {
-			n := node.asNodeInfoWithoutVer()
-			nodesInfo.NodeList = append(nodesInfo.NodeList, n)
+		if len(nodesInformation.NodeList) == 1 {
+			nodeInfo := nodesInformation.NodeList[0]
+			vnode, ok := op.vdb.HostNodeMap[host]
+			if !ok {
+				return fmt.Errorf("cannot find host %s in vdb", host)
+			}
+			vnode.State = nodeInfo.State
+		} else {
+			// if the result format is wrong on any of the hosts, we should throw an error
+			return fmt.Errorf("[%s] expect one node's information, but got %d nodes' information"+
+				" from HTTPS /v1/nodes/<host> endpoint on host %s",
+				op.name, len(nodesInformation.NodeList), host)
 		}
-		// successful case, write the result into exec context
-		execContext.nodesInfo = nodesInfo.NodeList
-		return nil
 	}
 
-	return allErrs
+	return nil
 }
 
-func (op *httpsCheckNodeStateOp) finalize(_ *opEngineExecContext) error {
+func (op *httpsUpdateNodeStateOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }

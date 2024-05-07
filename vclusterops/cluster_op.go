@@ -485,6 +485,7 @@ type ClusterCommands interface {
 	PrintError(msg string, v ...any)
 
 	VAddNode(options *VAddNodeOptions) (VCoordinationDatabase, error)
+	VStopNode(options *VStopNodeOptions) error
 	VAddSubcluster(options *VAddSubclusterOptions) error
 	VCreateDatabase(options *VCreateDatabaseOptions) (VCoordinationDatabase, error)
 	VDropDatabase(options *VDropDatabaseOptions) error
@@ -499,6 +500,7 @@ type ClusterCommands interface {
 	VShowRestorePoints(options *VShowRestorePointsOptions) (restorePoints []RestorePoint, err error)
 	VStartDatabase(options *VStartDatabaseOptions) (vdbPtr *VCoordinationDatabase, err error)
 	VStartNodes(options *VStartNodesOptions) error
+	VStartSubcluster(startScOpt *VStartScOptions) error
 	VStopDatabase(options *VStopDatabaseOptions) error
 	VReplicateDatabase(options *VReplicationDatabaseOptions) error
 	VFetchCoordinationDatabase(options *VFetchCoordinationDatabaseOptions) (VCoordinationDatabase, error)

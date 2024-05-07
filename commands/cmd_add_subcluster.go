@@ -54,7 +54,7 @@ func makeCmdAddSubcluster() *cobra.Command {
 You must provide a subcluster name with the --subcluster option.
 
 By default, the new subcluster is secondary. To add a primary subcluster, use
-the --is-primary flag.
+the --is-primary option.
 
 Examples:
   # Add a subcluster with config file
@@ -220,7 +220,7 @@ func (c *CmdAddSubcluster) Run(vcc vclusterops.ClusterCommands) error {
 			return err
 		}
 		// update db info in the config file
-		err = writeConfig(&vdb, vcc.GetLog())
+		err = writeConfig(&vdb)
 		if err != nil {
 			vcc.PrintWarning("fail to write config file, details: %s", err)
 		}

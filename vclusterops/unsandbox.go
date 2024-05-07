@@ -122,10 +122,6 @@ func (vcc *VClusterCommands) unsandboxPreCheck(vdb *VCoordinationDatabase, optio
 		}
 
 		if vnode.Subcluster == options.SCName {
-			// if the subcluster is not sandboxed, return error immediately
-			if vnode.Sandbox == "" {
-				return &SubclusterNotSandboxedError{SCName: options.SCName}
-			}
 			sandboxedHosts = append(sandboxedHosts, vnode.Address)
 			// when the node state is not "DOWN" ("UP" or "UNKNOWN"), we consider
 			// the node is running
