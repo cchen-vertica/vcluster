@@ -138,6 +138,7 @@ func (vcc *VClusterCommands) unsandboxPreCheck(vdb *VCoordinationDatabase, optio
 			}
 		}
 	}
+	// change hosts in options to all up hosts so the user can only provide hosts in main cluster
 	options.Hosts = upHosts
 
 	if !scFound {
