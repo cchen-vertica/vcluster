@@ -116,15 +116,11 @@ func (vcc *VClusterCommands) unsandboxPreCheck(vdb *VCoordinationDatabase, optio
 	scFound := false
 	var sandboxedHosts []string
 
-	upHosts := []string{}
 	for _, vnode := range vdb.HostNodeMap {
 		if !scFound && vnode.Subcluster == options.SCName {
 			scFound = true
 		}
 
-		if vnode.State != util.NodeDownState {
-			upHosts = append(upHosts, vnode.Address)
-		}
 		if vnode.Subcluster == options.SCName {
 			// if the subcluster is not sandboxed, return error immediately
 			if vnode.Sandbox == "" {
@@ -138,8 +134,6 @@ func (vcc *VClusterCommands) unsandboxPreCheck(vdb *VCoordinationDatabase, optio
 			}
 		}
 	}
-	// change hosts in options to all up hosts so the user can only provide hosts in main cluster
-	options.Hosts = upHosts
 
 	if !scFound {
 		vcc.Log.PrintError(`subcluster '%s' does not exist`, options.SCName)
