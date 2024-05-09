@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -19,23 +19,28 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 type httpsPollSubscriptionStateOp struct {
-	OpBase
-	OpHTTPSBase
-	timeout int
+	opBase
+	opHTTPSBase
+	timeout     int
+	nodesToPoll *[]string
 }
 
-func makeHTTPSPollSubscriptionStateOp(log vlog.Printer, hosts []string,
-	useHTTPPassword bool, userName string, httpsPassword *string) (httpsPollSubscriptionStateOp, error) {
+func makeHTTPSPollSubscriptionStateOp(hosts []string,
+	useHTTPPassword bool, userName string, httpsPassword *string, nodesToPoll *[]string) (httpsPollSubscriptionStateOp, error) {
 	op := httpsPollSubscriptionStateOp{}
 	op.name = "HTTPSPollSubscriptionStateOp"
-	op.log = log.WithName(op.name)
+	op.description = "Wait for subcluster shard rebalance"
 	op.hosts = hosts
 	op.useHTTPPassword = useHTTPPassword
 	op.timeout = StartupPollingTimeout
+	if len(*nodesToPoll) == 0 {
+		return op, fmt.Errorf("[%s] should specify a non-empty list of nodes to poll subscription status", op.name)
+	}
+
+	op.nodesToPoll = nodesToPoll
 
 	err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
 	if err != nil {
@@ -48,15 +53,16 @@ func makeHTTPSPollSubscriptionStateOp(log vlog.Printer, hosts []string,
 }
 
 func (op *httpsPollSubscriptionStateOp) getPollingTimeout() int {
-	return op.timeout
+	// a negative value indicates no timeout and should never be used for this op
+	return util.Max(op.timeout, 0)
 }
 
 func (op *httpsPollSubscriptionStateOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = GetMethod
-		httpRequest.Timeout = httpRequestTimeoutSeconds
-		httpRequest.BuildHTTPSEndpoint("subscriptions")
+		httpRequest.Timeout = defaultHTTPRequestTimeoutSeconds
+		httpRequest.buildHTTPSEndpoint("subscriptions")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -68,13 +74,13 @@ func (op *httpsPollSubscriptionStateOp) setupClusterHTTPRequest(hosts []string) 
 	return nil
 }
 
-func (op *httpsPollSubscriptionStateOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+func (op *httpsPollSubscriptionStateOp) prepare(execContext *opEngineExecContext) error {
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *httpsPollSubscriptionStateOp) execute(execContext *OpEngineExecContext) error {
+func (op *httpsPollSubscriptionStateOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -82,7 +88,7 @@ func (op *httpsPollSubscriptionStateOp) execute(execContext *OpEngineExecContext
 	return op.processResult(execContext)
 }
 
-func (op *httpsPollSubscriptionStateOp) finalize(_ *OpEngineExecContext) error {
+func (op *httpsPollSubscriptionStateOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }
 
@@ -103,18 +109,18 @@ func (op *httpsPollSubscriptionStateOp) finalize(_ *OpEngineExecContext) error {
 	...
   ]
 */
-type SubscriptionList struct {
-	SubscriptionList []SubscriptionInfo `json:"subscription_list"`
+type subscriptionList struct {
+	SubscriptionList []subscriptionInfo `json:"subscription_list"`
 }
 
-type SubscriptionInfo struct {
+type subscriptionInfo struct {
 	Nodename          string `json:"node_name"`
 	ShardName         string `json:"shard_name"`
 	SubscriptionState string `json:"subscription_state"`
 	IsPrimary         bool   `json:"is_primary"`
 }
 
-func (op *httpsPollSubscriptionStateOp) processResult(execContext *OpEngineExecContext) error {
+func (op *httpsPollSubscriptionStateOp) processResult(execContext *opEngineExecContext) error {
 	err := pollState(op, execContext)
 	if err != nil {
 		return fmt.Errorf("not all subscriptions are ACTIVE, %w", err)
@@ -124,37 +130,46 @@ func (op *httpsPollSubscriptionStateOp) processResult(execContext *OpEngineExecC
 }
 
 func (op *httpsPollSubscriptionStateOp) shouldStopPolling() (bool, error) {
-	var subscriptionList SubscriptionList
+	var subscriptList subscriptionList
 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
-		if result.IsPasswordAndCertificateError(op.log) {
+		if result.isPasswordAndCertificateError(op.logger) {
 			return true, fmt.Errorf("[%s] wrong password/certificate for https service on host %s",
 				op.name, host)
 		}
 
 		if result.isPassing() {
-			err := op.parseAndCheckResponse(host, result.content, &subscriptionList)
+			err := op.parseAndCheckResponse(host, result.content, &subscriptList)
 			if err != nil {
-				op.log.PrintError("[%s] fail to parse result on host %s, details: %s",
+				op.logger.PrintError("[%s] fail to parse result on host %s, details: %s",
 					op.name, host, err)
 				return true, err
 			}
 
-			// check whether all subscriptions are ACTIVE
-			for _, s := range subscriptionList.SubscriptionList {
-				if s.SubscriptionState != "ACTIVE" {
-					return false, nil
-				}
+			if containsInactiveSub(&subscriptList, op.nodesToPoll) {
+				return false, nil
 			}
 
-			op.log.PrintInfo("All subscriptions are ACTIVE")
+			op.logger.PrintInfo("All subscriptions are ACTIVE")
 			return true, nil
 		}
 	}
 
 	// this could happen if ResultCollection is empty
-	op.log.PrintError("[%s] empty result received from the provided hosts %v", op.name, op.hosts)
+	op.logger.PrintError("[%s] empty result received from the provided hosts %v", op.name, op.hosts)
 	return false, nil
+}
+
+func containsInactiveSub(subscriptList *subscriptionList, nodesToPoll *[]string) bool {
+	var allNodesWithInactiveSubs []string
+	for _, s := range subscriptList.SubscriptionList {
+		if s.SubscriptionState != "ACTIVE" {
+			allNodesWithInactiveSubs = append(allNodesWithInactiveSubs, s.Nodename)
+		}
+	}
+	nodesToPollWithActiveSubs := util.SliceDiff(*nodesToPoll, allNodesWithInactiveSubs)
+	// all subs of all nodes in nodesToPoll are active
+	return len(*nodesToPoll) != len(nodesToPollWithActiveSubs)
 }

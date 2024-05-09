@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -19,43 +19,46 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 type nmaLoadRemoteCatalogOp struct {
-	OpBase
+	opBase
 	hostRequestBodyMap      map[string]string
 	configurationParameters map[string]string
 	oldHosts                []string
 	vdb                     *VCoordinationDatabase
 	timeout                 uint
 	primaryNodeCount        uint
+	restorePoint            *RestorePointPolicy
 }
 
 type loadRemoteCatalogRequestData struct {
-	DBName             string              `json:"db_name"`
-	StorageLocations   []string            `json:"storage_locations"`
-	CommunalLocation   string              `json:"communal_location"`
-	CatalogPath        string              `json:"catalog_path"`
-	Host               string              `json:"host"`
-	NodeName           string              `json:"node_name"`
-	AWSAccessKeyID     string              `json:"aws_access_key_id,omitempty"`
-	AWSSecretAccessKey string              `json:"aws_secret_access_key,omitempty"`
-	NodeAddresses      map[string][]string `json:"node_addresses"`
-	Parameters         map[string]string   `json:"parameters,omitempty"`
+	DBName              string              `json:"db_name"`
+	StorageLocations    []string            `json:"storage_locations"`
+	CommunalLocation    string              `json:"communal_location"`
+	CatalogPath         string              `json:"catalog_path"`
+	Host                string              `json:"host"`
+	NodeName            string              `json:"node_name"`
+	AWSAccessKeyID      string              `json:"aws_access_key_id,omitempty"`
+	AWSSecretAccessKey  string              `json:"aws_secret_access_key,omitempty"`
+	NodeAddresses       map[string][]string `json:"node_addresses"`
+	Parameters          map[string]string   `json:"parameters,omitempty"`
+	RestorePointArchive string              `json:"restore_point_archive,omitempty"`
+	RestorePointIndex   int                 `json:"restore_point_index,omitempty"`
+	RestorePointID      string              `json:"restore_point_id,omitempty"`
 }
 
-func makeNMALoadRemoteCatalogOp(log vlog.Printer, oldHosts []string, configurationParameters map[string]string,
-	vdb *VCoordinationDatabase, timeout uint) nmaLoadRemoteCatalogOp {
+func makeNMALoadRemoteCatalogOp(oldHosts []string, configurationParameters map[string]string,
+	vdb *VCoordinationDatabase, timeout uint, restorePoint *RestorePointPolicy) nmaLoadRemoteCatalogOp {
 	op := nmaLoadRemoteCatalogOp{}
 	op.name = "NMALoadRemoteCatalogOp"
-	op.log = log.WithName(op.name)
+	op.description = "Load remote catalog"
 	op.hosts = vdb.HostList
 	op.oldHosts = oldHosts
 	op.configurationParameters = configurationParameters
 	op.vdb = vdb
 	op.timeout = timeout
+	op.restorePoint = restorePoint
 
 	op.primaryNodeCount = 0
 	for _, vnode := range vdb.HostNodeMap {
@@ -68,7 +71,7 @@ func makeNMALoadRemoteCatalogOp(log vlog.Printer, oldHosts []string, configurati
 }
 
 // make https json data
-func (op *nmaLoadRemoteCatalogOp) setupRequestBody(execContext *OpEngineExecContext) error {
+func (op *nmaLoadRemoteCatalogOp) setupRequestBody(execContext *opEngineExecContext) error {
 	if len(execContext.networkProfiles) != len(op.hosts) {
 		return fmt.Errorf("[%s] the number of hosts in networkProfiles does not match"+
 			" the number of hosts that will load remote catalogs", op.name)
@@ -98,6 +101,11 @@ func (op *nmaLoadRemoteCatalogOp) setupRequestBody(execContext *OpEngineExecCont
 		requestData.StorageLocations = vNode.StorageLocations
 		requestData.NodeAddresses = nodeAddresses
 		requestData.Parameters = op.configurationParameters
+		if op.restorePoint != nil {
+			requestData.RestorePointArchive = op.restorePoint.Archive
+			requestData.RestorePointIndex = op.restorePoint.Index
+			requestData.RestorePointID = op.restorePoint.ID
+		}
 
 		dataBytes, err := json.Marshal(requestData)
 		if err != nil {
@@ -112,9 +120,9 @@ func (op *nmaLoadRemoteCatalogOp) setupRequestBody(execContext *OpEngineExecCont
 
 func (op *nmaLoadRemoteCatalogOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildNMAEndpoint("catalog/revive")
+		httpRequest.buildNMAEndpoint("catalog/revive")
 		httpRequest.RequestData = op.hostRequestBodyMap[host]
 		httpRequest.Timeout = int(op.timeout)
 
@@ -124,17 +132,17 @@ func (op *nmaLoadRemoteCatalogOp) setupClusterHTTPRequest(hosts []string) error 
 	return nil
 }
 
-func (op *nmaLoadRemoteCatalogOp) prepare(execContext *OpEngineExecContext) error {
+func (op *nmaLoadRemoteCatalogOp) prepare(execContext *opEngineExecContext) error {
 	err := op.setupRequestBody(execContext)
 	if err != nil {
 		return err
 	}
 
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *nmaLoadRemoteCatalogOp) execute(execContext *OpEngineExecContext) error {
+func (op *nmaLoadRemoteCatalogOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -142,11 +150,11 @@ func (op *nmaLoadRemoteCatalogOp) execute(execContext *OpEngineExecContext) erro
 	return op.processResult(execContext)
 }
 
-func (op *nmaLoadRemoteCatalogOp) finalize(_ *OpEngineExecContext) error {
+func (op *nmaLoadRemoteCatalogOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }
 
-func (op *nmaLoadRemoteCatalogOp) processResult(_ *OpEngineExecContext) error {
+func (op *nmaLoadRemoteCatalogOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 	var successPrimaryNodeCount uint
 
@@ -180,7 +188,7 @@ func (op *nmaLoadRemoteCatalogOp) processResult(_ *OpEngineExecContext) error {
 	// quorum check
 	if !op.hasQuorum(successPrimaryNodeCount, op.primaryNodeCount) {
 		err := fmt.Errorf("[%s] fail to load catalog on enough primary nodes. Success count: %d", op.name, successPrimaryNodeCount)
-		op.log.Error(err, "fail to load catalog, detail")
+		op.logger.Error(err, "fail to load catalog, detail")
 		allErrs = errors.Join(allErrs, err)
 		return allErrs
 	}

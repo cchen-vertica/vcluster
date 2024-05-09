@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -28,42 +28,50 @@ import (
 type VReIPOptions struct {
 	DatabaseOptions
 
+	// re-ip list
 	ReIPList []ReIPInfo
+
+	/* hidden option */
+
+	// whether trim re-ip list based on the catalog info
+	TrimReIPList bool
 }
 
 func VReIPFactory() VReIPOptions {
 	opt := VReIPOptions{}
 	// set default values to the params
-	opt.SetDefaultValues()
+	opt.setDefaultValues()
+	opt.TrimReIPList = false
 
 	return opt
 }
 
-func (opt *VReIPOptions) validateParseOptions(log vlog.Printer) error {
+func (opt *VReIPOptions) validateParseOptions(logger vlog.Printer) error {
 	err := util.ValidateRequiredAbsPath(opt.CatalogPrefix, "catalog path")
 	if err != nil {
 		return err
 	}
 
-	if *opt.CommunalStorageLocation != "" {
-		return util.ValidateCommunalStorageLocation(*opt.CommunalStorageLocation)
+	if opt.CommunalStorageLocation != "" {
+		return util.ValidateCommunalStorageLocation(opt.CommunalStorageLocation)
 	}
 
-	return opt.ValidateBaseOptions("re_ip", log)
+	return opt.validateBaseOptions("re_ip", logger)
 }
 
 func (opt *VReIPOptions) analyzeOptions() error {
-	hostAddresses, err := util.ResolveRawHostsToAddresses(opt.RawHosts, opt.Ipv6.ToBool())
-	if err != nil {
-		return err
+	if len(opt.RawHosts) > 0 {
+		hostAddresses, err := util.ResolveRawHostsToAddresses(opt.RawHosts, opt.IPv6)
+		if err != nil {
+			return err
+		}
+		opt.Hosts = hostAddresses
 	}
-
-	opt.Hosts = hostAddresses
 	return nil
 }
 
-func (opt *VReIPOptions) ValidateAnalyzeOptions(log vlog.Printer) error {
-	if err := opt.validateParseOptions(log); err != nil {
+func (opt *VReIPOptions) validateAnalyzeOptions(logger vlog.Printer) error {
+	if err := opt.validateParseOptions(logger); err != nil {
 		return err
 	}
 	if err := opt.analyzeOptions(); err != nil {
@@ -76,7 +84,7 @@ func (opt *VReIPOptions) ValidateAnalyzeOptions(log vlog.Printer) error {
 	}
 
 	// address check
-	ipv6 := opt.Ipv6.ToBool()
+	ipv6 := opt.IPv6
 	nodeAddresses := make(map[string]struct{})
 	for _, info := range opt.ReIPList {
 		// the addresses must be valid IPs
@@ -107,34 +115,39 @@ func (opt *VReIPOptions) ValidateAnalyzeOptions(log vlog.Printer) error {
 	return nil
 }
 
-// VReIP changes nodes addresses (node address, control address, and control broadcast)
-func (vcc *VClusterCommands) VReIP(options *VReIPOptions) error {
+// VReIP changes the node address, control address, and control broadcast for a node.
+// It returns any error encountered.
+func (vcc VClusterCommands) VReIP(options *VReIPOptions) error {
 	/*
 	 *   - Produce Instructions
 	 *   - Create a VClusterOpEngine
 	 *   - Give the instructions to the VClusterOpEngine to run
 	 */
 
-	err := options.ValidateAnalyzeOptions(vcc.Log)
+	err := options.validateAnalyzeOptions(vcc.Log)
 	if err != nil {
 		return err
 	}
 
+	// VER-93369 may improve this if the CLI knows which nodes are primary
+	// from the config file
 	var pVDB *VCoordinationDatabase
-	// retrieve database information from cluster_config.json for EON databases
-	if options.IsEon.ToBool() {
-		if *options.CommunalStorageLocation != "" {
+	// retrieve database information from cluster_config.json for Eon databases
+	if options.IsEon {
+		const warningMsg = " for an Eon database, re_ip after revive_db could fail " +
+			"because we cannot retrieve the correct database information"
+		if options.CommunalStorageLocation != "" {
 			vdb, e := options.getVDBWhenDBIsDown(vcc)
 			if e != nil {
-				return e
+				// show a warning message if we cannot get VDB from a down database
+				vcc.Log.PrintWarning("failed to retrieve the communal storage location" + warningMsg)
 			}
 			pVDB = &vdb
 		} else {
 			// When communal storage location is missing, we only log a debug message
 			// because re-ip only fails in between revive_db and first start_db.
 			// We should not ran re-ip in that case because revive_db has already done the re-ip work.
-			vcc.Log.V(1).Info("communal storage location is not specified for an eon database," +
-				" re_ip after revive_db could fail because we cannot retrieve the correct database information")
+			vcc.Log.V(1).Info("communal storage location is not specified" + warningMsg)
 		}
 	}
 
@@ -145,11 +158,11 @@ func (vcc *VClusterCommands) VReIP(options *VReIPOptions) error {
 	}
 
 	// create a VClusterOpEngine, and add certs to the engine
-	certs := HTTPSCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := MakeClusterOpEngine(instructions, &certs)
+	certs := httpsCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
+	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
 
 	// give the instructions to the VClusterOpEngine to run
-	runError := clusterOpEngine.Run(vcc.Log)
+	runError := clusterOpEngine.run(vcc.Log)
 	if runError != nil {
 		return fmt.Errorf("fail to re-ip: %w", runError)
 	}
@@ -160,12 +173,11 @@ func (vcc *VClusterCommands) VReIP(options *VReIPOptions) error {
 // The generated instructions will later perform the following operations necessary
 // for a successful re_ip:
 //   - Check NMA connectivity
-//   - Check Vertica versions
 //   - Read database info from catalog editor
 //     (now we should know which hosts have the latest catalog)
 //   - Run re-ip on the target nodes
-func (vcc *VClusterCommands) produceReIPInstructions(options *VReIPOptions, vdb *VCoordinationDatabase) ([]ClusterOp, error) {
-	var instructions []ClusterOp
+func (vcc VClusterCommands) produceReIPInstructions(options *VReIPOptions, vdb *VCoordinationDatabase) ([]clusterOp, error) {
+	var instructions []clusterOp
 
 	if len(options.ReIPList) == 0 {
 		return instructions, errors.New("the re-ip information is not provided")
@@ -173,29 +185,36 @@ func (vcc *VClusterCommands) produceReIPInstructions(options *VReIPOptions, vdb 
 
 	hosts := options.Hosts
 
-	nmaHealthOp := makeNMAHealthOp(vcc.Log, hosts)
-	nmaVerticaVersionOp := makeNMAVerticaVersionOp(vcc.Log, hosts, true)
+	nmaHealthOp := makeNMAHealthOp(hosts)
+
+	// Re-IP should only be used for down DB, checking if db is running
+	checkDBRunningOp, err := makeHTTPSCheckRunningDBOp(hosts,
+		options.usePassword, options.UserName, options.Password, ReIP)
+	if err != nil {
+		return instructions, err
+	}
+	instructions = append(instructions,
+		&nmaHealthOp,
+		&checkDBRunningOp,
+	)
 
 	// get network profiles of the new addresses
 	var newAddresses []string
 	for _, info := range options.ReIPList {
 		newAddresses = append(newAddresses, info.TargetAddress)
 	}
-	nmaNetworkProfileOp := makeNMANetworkProfileOp(vcc.Log, newAddresses)
+	nmaNetworkProfileOp := makeNMANetworkProfileOp(newAddresses)
 
-	instructions = append(instructions,
-		&nmaHealthOp,
-		&nmaVerticaVersionOp,
-		&nmaNetworkProfileOp,
-	)
+	instructions = append(instructions, &nmaNetworkProfileOp)
 
 	vdbWithPrimaryNodes := new(VCoordinationDatabase)
 	// When we cannot get db info from cluster_config.json, we will fetch it from NMA /nodes endpoint.
 	if vdb == nil {
 		vdb = new(VCoordinationDatabase)
-		nmaGetNodesInfoOp := makeNMAGetNodesInfoOp(vcc.Log, options.Hosts, *options.DBName, *options.CatalogPrefix, vdb)
+		nmaGetNodesInfoOp := makeNMAGetNodesInfoOp(options.Hosts, options.DBName, options.CatalogPrefix,
+			false /* report all errors */, vdb)
 		// read catalog editor to get hosts with latest catalog
-		nmaReadCatEdOp, err := makeNMAReadCatalogEditorOp(vcc.Log, vdb)
+		nmaReadCatEdOp, err := makeNMAReadCatalogEditorOp(vdb)
 		if err != nil {
 			return instructions, err
 		}
@@ -208,7 +227,7 @@ func (vcc *VClusterCommands) produceReIPInstructions(options *VReIPOptions, vdb 
 		*vdbWithPrimaryNodes = *vdb
 		vdbWithPrimaryNodes.filterPrimaryNodes()
 		// read catalog editor to get hosts with latest catalog
-		nmaReadCatEdOp, err := makeNMAReadCatalogEditorOp(vcc.Log, vdbWithPrimaryNodes)
+		nmaReadCatEdOp, err := makeNMAReadCatalogEditorOp(vdbWithPrimaryNodes)
 		if err != nil {
 			return instructions, err
 		}
@@ -218,7 +237,7 @@ func (vcc *VClusterCommands) produceReIPInstructions(options *VReIPOptions, vdb 
 	// re-ip
 	// at this stage the re-ip info should either by provided by
 	// the re-ip file (for vcluster CLI) or the Kubernetes operator
-	nmaReIPOP := makeNMAReIPOp(vcc.Log, options.ReIPList, vdb)
+	nmaReIPOP := makeNMAReIPOp(options.ReIPList, vdb, options.TrimReIPList)
 
 	instructions = append(instructions, &nmaReIPOP)
 
@@ -232,7 +251,8 @@ type reIPRow struct {
 	NewControlBroadcast string `json:"to_control_broadcast,omitempty"`
 }
 
-// ReadReIPFile reads the re-ip file and build a list of ReIPInfo
+// ReadReIPFile reads the re-IP file and builds a slice of ReIPInfo.
+// It returns any error encountered.
 func (opt *VReIPOptions) ReadReIPFile(path string) error {
 	if err := util.AbsPathCheck(path); err != nil {
 		return fmt.Errorf("must specify an absolute path for the re-ip file")
@@ -267,7 +287,7 @@ func (opt *VReIPOptions) ReadReIPFile(path string) error {
 		return nil
 	}
 
-	ipv6 := opt.Ipv6.ToBool()
+	ipv6 := opt.IPv6
 	for _, row := range reIPRows {
 		var info ReIPInfo
 		info.NodeAddress = row.CurrentAddress

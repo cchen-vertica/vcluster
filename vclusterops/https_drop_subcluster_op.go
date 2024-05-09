@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -23,8 +23,8 @@ import (
 )
 
 type httpsDropSubclusterOp struct {
-	OpBase
-	OpHTTPSBase
+	opBase
+	opHTTPSBase
 	scName string
 }
 
@@ -33,6 +33,7 @@ func makeHTTPSDropSubclusterOp(hosts []string, scName string,
 ) (httpsDropSubclusterOp, error) {
 	op := httpsDropSubclusterOp{}
 	op.name = "HTTPSDropSubclusterOp"
+	op.description = "Drop subcluster in catalog"
 	op.hosts = hosts
 	op.useHTTPPassword = useHTTPPassword
 	op.scName = scName
@@ -51,9 +52,9 @@ func makeHTTPSDropSubclusterOp(hosts []string, scName string,
 
 func (op *httpsDropSubclusterOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildHTTPSEndpoint("subclusters/" + op.scName + "/drop")
+		httpRequest.buildHTTPSEndpoint("subclusters/" + op.scName + "/drop")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -65,13 +66,13 @@ func (op *httpsDropSubclusterOp) setupClusterHTTPRequest(hosts []string) error {
 	return nil
 }
 
-func (op *httpsDropSubclusterOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+func (op *httpsDropSubclusterOp) prepare(execContext *opEngineExecContext) error {
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *httpsDropSubclusterOp) execute(execContext *OpEngineExecContext) error {
+func (op *httpsDropSubclusterOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -79,13 +80,13 @@ func (op *httpsDropSubclusterOp) execute(execContext *OpEngineExecContext) error
 	return op.processResult(execContext)
 }
 
-func (op *httpsDropSubclusterOp) processResult(_ *OpEngineExecContext) error {
+func (op *httpsDropSubclusterOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
-		if result.IsUnauthorizedRequest() {
+		if result.isUnauthorizedRequest() {
 			return fmt.Errorf("[%s] wrong password/certificate for https service on host %s",
 				op.name, host)
 		}
@@ -101,6 +102,6 @@ func (op *httpsDropSubclusterOp) processResult(_ *OpEngineExecContext) error {
 	return appendHTTPSFailureError(allErrs)
 }
 
-func (op *httpsDropSubclusterOp) finalize(_ *OpEngineExecContext) error {
+func (op *httpsDropSubclusterOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }

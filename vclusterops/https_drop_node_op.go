@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -17,50 +17,48 @@ package vclusterops
 
 import (
 	"errors"
+	"strconv"
 
 	"github.com/vertica/vcluster/vclusterops/util"
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-type HTTPSDropNodeOp struct {
-	OpBase
-	OpHTTPSBase
+type httpsDropNodeOp struct {
+	opBase
+	opHTTPSBase
 	targetHost    string
 	RequestParams map[string]string
 }
 
-func makeHTTPSDropNodeOp(log vlog.Printer, vnode string,
+// makeHTTPSDropNodeOp is a constructor for httpsDropNodeOp. The cascade option
+// should be true if an Eon deployment and the node we are dropping is down.
+func makeHTTPSDropNodeOp(vnode string,
 	initiatorHost []string,
 	useHTTPPassword bool,
 	userName string,
 	httpsPassword *string,
-	isEon bool) (HTTPSDropNodeOp, error) {
-	dropNodeOp := HTTPSDropNodeOp{}
-	dropNodeOp.name = "HTTPSDropNodeOp"
-	dropNodeOp.log = log.WithName(dropNodeOp.name)
-	dropNodeOp.hosts = initiatorHost
-	dropNodeOp.targetHost = vnode
-	dropNodeOp.useHTTPPassword = useHTTPPassword
-	err := util.ValidateUsernameAndPassword(dropNodeOp.name, useHTTPPassword, userName)
+	cascade bool) (httpsDropNodeOp, error) {
+	op := httpsDropNodeOp{}
+	op.name = "HTTPSDropNodeOp"
+	op.description = "Drop node in catalog"
+	op.hosts = initiatorHost
+	op.targetHost = vnode
+	op.useHTTPPassword = useHTTPPassword
+	err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
 	if err != nil {
-		return dropNodeOp, err
+		return op, err
 	}
-	dropNodeOp.userName = userName
-	dropNodeOp.httpsPassword = httpsPassword
-	dropNodeOp.RequestParams = make(map[string]string)
-	if isEon {
-		dropNodeOp.RequestParams["cascade"] = "true"
-		return dropNodeOp, nil
-	}
-	dropNodeOp.RequestParams["cascade"] = "false"
-	return dropNodeOp, nil
+	op.userName = userName
+	op.httpsPassword = httpsPassword
+	op.RequestParams = make(map[string]string)
+	op.RequestParams["cascade"] = strconv.FormatBool(cascade)
+	return op, nil
 }
 
-func (op *HTTPSDropNodeOp) setupClusterHTTPRequest(hosts []string) error {
+func (op *httpsDropNodeOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildHTTPSEndpoint("nodes/" + op.targetHost + "/drop")
+		httpRequest.buildHTTPSEndpoint("nodes/" + op.targetHost + "/drop")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -71,12 +69,12 @@ func (op *HTTPSDropNodeOp) setupClusterHTTPRequest(hosts []string) error {
 	return nil
 }
 
-func (op *HTTPSDropNodeOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+func (op *httpsDropNodeOp) prepare(execContext *opEngineExecContext) error {
+	execContext.dispatcher.setup(op.hosts)
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *HTTPSDropNodeOp) execute(execContext *OpEngineExecContext) error {
+func (op *httpsDropNodeOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -84,13 +82,13 @@ func (op *HTTPSDropNodeOp) execute(execContext *OpEngineExecContext) error {
 	return op.processResult(execContext)
 }
 
-func (op *HTTPSDropNodeOp) processResult(_ *OpEngineExecContext) error {
+func (op *httpsDropNodeOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
-		if !result.IsSuccess() {
+		if !result.isSuccess() {
 			allErrs = errors.Join(allErrs, result.err)
 			continue
 		}
@@ -98,6 +96,6 @@ func (op *HTTPSDropNodeOp) processResult(_ *OpEngineExecContext) error {
 	return allErrs
 }
 
-func (op *HTTPSDropNodeOp) finalize(_ *OpEngineExecContext) error {
+func (op *httpsDropNodeOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }

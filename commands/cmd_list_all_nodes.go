@@ -1,12 +1,26 @@
+/*
+ (c) Copyright [2023-2024] Open Text.
+ Licensed under the Apache License, Version 2.0 (the "License");
+ You may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+ http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+*/
+
 package commands
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 
+	"github.com/spf13/cobra"
 	"github.com/vertica/vcluster/vclusterops"
-	"github.com/vertica/vcluster/vclusterops/util"
 	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
@@ -20,78 +34,127 @@ type CmdListAllNodes struct {
 	CmdBase
 }
 
-func makeListAllNodes() *CmdListAllNodes {
+func makeListAllNodes() *cobra.Command {
 	newCmd := &CmdListAllNodes{}
-	newCmd.parser = flag.NewFlagSet("list_allnodes", flag.ExitOnError)
 
-	newCmd.hostListStr = newCmd.parser.String("hosts", "", "Comma-separated list of hosts to participate in database")
-	newCmd.ipv6 = newCmd.parser.Bool("ipv6", false, "List all nodes with IPv6 hosts")
+	opt := vclusterops.VFetchNodeStateOptionsFactory()
+	newCmd.fetchNodeStateOptions = &opt
 
-	fetchNodeStateOpt := vclusterops.VFetchNodeStateOptionsFactory()
-	fetchNodeStateOpt.Password = newCmd.parser.String("password", "", util.GetOptionalFlagMsg("Database password in single quotes"))
+	cmd := makeBasicCobraCmd(
+		newCmd,
+		listAllNodesSubCmd,
+		"List all nodes in the database",
+		`This subcommand queries the status of the nodes in the database and prints
+whether they are up or down.
 
-	newCmd.fetchNodeStateOptions = &fetchNodeStateOpt
+To provide its status, each host must run the spread daemon.
 
-	return newCmd
+You must provide the --hosts option one or more hosts as a comma-separated
+list. list_allnodes returns the first response it receives from any host.
+
+The --db-name and --catalog-path options are required only when vcluster cannot
+obtain node information from a running database and the config file is not
+provided.
+
+Examples:
+  # List the status of nodes with config file where password authentication is
+  # used to access the database
+  vcluster list_allnodes --password testpassword \
+    --config /opt/vertica/config/vertica_cluster.yaml
+`,
+		[]string{dbNameFlag, hostsFlag, passwordFlag, catalogPathFlag, configFlag, outputFileFlag},
+	)
+
+	return cmd
 }
 
-func (c *CmdListAllNodes) CommandType() string {
-	return "list_allnodes"
-}
-
-func (c *CmdListAllNodes) Parse(inputArgv []string, log vlog.Printer) error {
+func (c *CmdListAllNodes) Parse(inputArgv []string, logger vlog.Printer) error {
 	c.argv = inputArgv
-	err := c.ValidateParseArgv(c.CommandType(), log)
-	if err != nil {
-		return err
-	}
+	logger.LogArgParse(&c.argv)
 
 	// for some options, we do not want to use their default values,
 	// if they are not provided in cli,
 	// reset the value of those options to nil
-	if !util.IsOptionSet(c.parser, "password") {
-		c.fetchNodeStateOptions.Password = nil
-	}
+	c.ResetUserInputOptions(&c.fetchNodeStateOptions.DatabaseOptions)
 
-	return c.validateParse(log)
+	// Set GetVersion to true so that the CLI can retrieve versions for down nodes
+	// by invoking two additional operations: NMAHealth and NMA readCatalogEditor
+	c.fetchNodeStateOptions.GetVersion = true
+	return c.validateParse(logger)
 }
 
-func (c *CmdListAllNodes) validateParse(log vlog.Printer) error {
-	log.Info("Called validateParse()")
-
-	// parse raw host str input into a []string
-	err := c.ParseHostList(&c.fetchNodeStateOptions.DatabaseOptions)
+func (c *CmdListAllNodes) validateParse(logger vlog.Printer) error {
+	logger.Info("Called validateParse()", "command", listAllNodesSubCmd)
+	err := c.getCertFilesFromCertPaths(&c.fetchNodeStateOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
 
-	// parse Ipv6
-	c.fetchNodeStateOptions.Ipv6.FromBoolPointer(c.CmdBase.ipv6)
-
-	return nil
+	err = c.ValidateParseBaseOptions(&c.fetchNodeStateOptions.DatabaseOptions)
+	if err != nil {
+		return err
+	}
+	return c.setDBPassword(&c.fetchNodeStateOptions.DatabaseOptions)
 }
 
-func (c *CmdListAllNodes) Analyze(_ vlog.Printer) error {
-	return nil
-}
-
-func (c *CmdListAllNodes) Run(vcc vclusterops.VClusterCommands) error {
-	vcc.Log.V(1).Info("Called method Run()")
+func (c *CmdListAllNodes) Run(vcc vclusterops.ClusterCommands) error {
+	vcc.V(1).Info("Called method Run()")
 
 	nodeStates, err := vcc.VFetchNodeState(c.fetchNodeStateOptions)
 	if err != nil {
 		// if all nodes are down, the nodeStates list is not empty
 		// for this case, we don't want to show errors but show DOWN for the nodes
 		if len(nodeStates) == 0 {
-			vcc.Log.PrintError("fail to list all nodes: %s", err)
+			vcc.PrintError("fail to list all nodes: %s", err)
 			return err
 		}
 	}
 
-	bytes, err := json.Marshal(nodeStates)
+	bytes, err := c.marshalNoteStates(nodeStates)
 	if err != nil {
-		return fmt.Errorf("fail to marshal the node state result, details %w", err)
+		return err
 	}
-	vcc.Log.PrintInfo("Node states: %s", string(bytes))
+
+	c.writeCmdOutputToFile(globals.file, bytes, vcc.GetLog())
+	vcc.LogInfo("Node states: ", "nodeStates", string(bytes))
 	return nil
+}
+
+// SetDatabaseOptions will assign a vclusterops.DatabaseOptions instance to the one in CmdListAllNodes
+func (c *CmdListAllNodes) SetDatabaseOptions(opt *vclusterops.DatabaseOptions) {
+	c.fetchNodeStateOptions.DatabaseOptions = *opt
+}
+
+func (c *CmdListAllNodes) marshalNoteStates(nodeStates []vclusterops.NodeInfo) (bytes []byte, err error) {
+	var isEon bool
+	if len(nodeStates) > 0 {
+		// node in Eon database should not have an empty sc name
+		if nodeStates[0].Subcluster != "" {
+			isEon = true
+		}
+	}
+
+	if isEon {
+		bytes, err = json.MarshalIndent(nodeStates, "", "  ")
+		if err != nil {
+			return bytes, fmt.Errorf("fail to marshal the node state result, details %w", err)
+		}
+	} else {
+		var nodeStatesEnterprise []vclusterops.NodeInfoEnterprise
+		for _, n := range nodeStates {
+			var nEnterprise vclusterops.NodeInfoEnterprise
+			nEnterprise.Address = n.Address
+			nEnterprise.Name = n.Name
+			nEnterprise.State = n.State
+			nEnterprise.CatalogPath = n.CatalogPath
+			nEnterprise.Version = n.Version
+			nodeStatesEnterprise = append(nodeStatesEnterprise, nEnterprise)
+		}
+		bytes, err = json.MarshalIndent(nodeStatesEnterprise, "", "  ")
+		if err != nil {
+			return bytes, fmt.Errorf("fail to marshal the node state result, details %w", err)
+		}
+	}
+
+	return bytes, nil
 }

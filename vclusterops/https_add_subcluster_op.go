@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -21,37 +21,36 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-type HTTPSAddSubclusterOp struct {
-	OpBase
-	OpHTTPSBase
+type httpsAddSubclusterOp struct {
+	opBase
+	opHTTPSBase
 	hostRequestBodyMap map[string]string
 	scName             string
 	isSecondary        bool
 	ctlSetSize         int
 }
 
-func makeHTTPSAddSubclusterOp(log vlog.Printer, useHTTPPassword bool, userName string, httpsPassword *string,
-	scName string, isPrimary bool, ctlSetSize int) (HTTPSAddSubclusterOp, error) {
-	httpsAddSubclusterOp := HTTPSAddSubclusterOp{}
-	httpsAddSubclusterOp.name = "HTTPSAddSubclusterOp"
-	httpsAddSubclusterOp.scName = scName
-	httpsAddSubclusterOp.log = log.WithName(httpsAddSubclusterOp.name)
-	httpsAddSubclusterOp.isSecondary = !isPrimary
-	httpsAddSubclusterOp.ctlSetSize = ctlSetSize
+func makeHTTPSAddSubclusterOp(useHTTPPassword bool, userName string, httpsPassword *string,
+	scName string, isPrimary bool, ctlSetSize int) (httpsAddSubclusterOp, error) {
+	op := httpsAddSubclusterOp{}
+	op.name = "HTTPSAddSubclusterOp"
+	op.description = "Add subcluster to catalog"
+	op.scName = scName
+	op.isSecondary = !isPrimary
+	op.ctlSetSize = ctlSetSize
 
-	httpsAddSubclusterOp.useHTTPPassword = useHTTPPassword
+	op.useHTTPPassword = useHTTPPassword
 	if useHTTPPassword {
-		err := util.ValidateUsernameAndPassword(httpsAddSubclusterOp.name, useHTTPPassword, userName)
+		err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
 		if err != nil {
-			return httpsAddSubclusterOp, err
+			return op, err
 		}
-		httpsAddSubclusterOp.userName = userName
-		httpsAddSubclusterOp.httpsPassword = httpsPassword
+		op.userName = userName
+		op.httpsPassword = httpsPassword
 	}
-	return httpsAddSubclusterOp, nil
+	return op, nil
 }
 
 type addSubclusterRequestData struct {
@@ -59,7 +58,7 @@ type addSubclusterRequestData struct {
 	CtlSetSize  int  `json:"control_set_size,omitempty"`
 }
 
-func (op *HTTPSAddSubclusterOp) setupRequestBody(hosts []string) error {
+func (op *httpsAddSubclusterOp) setupRequestBody(hosts []string) error {
 	op.hostRequestBodyMap = make(map[string]string)
 
 	for _, host := range hosts {
@@ -78,11 +77,11 @@ func (op *HTTPSAddSubclusterOp) setupRequestBody(hosts []string) error {
 	return nil
 }
 
-func (op *HTTPSAddSubclusterOp) setupClusterHTTPRequest(hosts []string) error {
+func (op *httpsAddSubclusterOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildHTTPSEndpoint("subclusters/" + op.scName)
+		httpRequest.buildHTTPSEndpoint("subclusters/" + op.scName)
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -94,7 +93,7 @@ func (op *HTTPSAddSubclusterOp) setupClusterHTTPRequest(hosts []string) error {
 	return nil
 }
 
-func (op *HTTPSAddSubclusterOp) prepare(execContext *OpEngineExecContext) error {
+func (op *httpsAddSubclusterOp) prepare(execContext *opEngineExecContext) error {
 	if len(execContext.upHosts) == 0 {
 		return fmt.Errorf(`[%s] Cannot find any up hosts in OpEngineExecContext`, op.name)
 	}
@@ -104,12 +103,12 @@ func (op *HTTPSAddSubclusterOp) prepare(execContext *OpEngineExecContext) error 
 	if err != nil {
 		return err
 	}
-	execContext.dispatcher.Setup(hosts)
+	execContext.dispatcher.setup(hosts)
 
 	return op.setupClusterHTTPRequest(hosts)
 }
 
-func (op *HTTPSAddSubclusterOp) execute(execContext *OpEngineExecContext) error {
+func (op *httpsAddSubclusterOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -117,13 +116,13 @@ func (op *HTTPSAddSubclusterOp) execute(execContext *OpEngineExecContext) error 
 	return op.processResult(execContext)
 }
 
-func (op *HTTPSAddSubclusterOp) processResult(_ *OpEngineExecContext) error {
+func (op *httpsAddSubclusterOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
-		if result.IsUnauthorizedRequest() {
+		if result.isUnauthorizedRequest() {
 			// skip checking response from other nodes because we will get the same error there
 			return result.err
 		}
@@ -151,6 +150,6 @@ func (op *HTTPSAddSubclusterOp) processResult(_ *OpEngineExecContext) error {
 	return allErrs
 }
 
-func (op *HTTPSAddSubclusterOp) finalize(_ *OpEngineExecContext) error {
+func (op *httpsAddSubclusterOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }

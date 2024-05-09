@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -17,21 +17,33 @@ package vclusterops
 
 import "github.com/vertica/vcluster/vclusterops/vlog"
 
-type OpEngineExecContext struct {
-	dispatcher             HTTPRequestDispatcher
-	networkProfiles        map[string]NetworkProfile
-	nmaVDatabase           NmaVDatabase
-	upHosts                []string // a sorted host list that contains all up nodes
-	nodesInfo              []NodeInfo
-	defaultSCName          string // store the default subcluster name of the database
-	hostsWithLatestCatalog []string
-	startupCommandMap      map[string][]string // store start up command map to restart nodes
-	dbInfo                 string              // store the db info that retrieved from communal storage
+type opEngineExecContext struct {
+	dispatcher      requestDispatcher
+	networkProfiles map[string]networkProfile
+	nmaVDatabase    nmaVDatabase
+	upHosts         []string // a sorted host list that contains all up nodes
+	nodesInfo       []NodeInfo
+	scNodesInfo     []NodeInfo // a node list contains all nodes in a subcluster
+
+	// This field is specifically used for sandboxing
+	// as sandboxing requires all nodes in the subcluster to be sandboxed to be UP.
+	upScInfo                      map[string]string // map with UP hosts as keys and their subcluster names as values.
+	upHostsToSandboxes            map[string]string // map with UP hosts as keys and their corresponding sandbox names as values.
+	defaultSCName                 string            // store the default subcluster name of the database
+	hostsWithLatestCatalog        []string
+	primaryHostsWithLatestCatalog []string
+	startupCommandMap             map[string][]string // store start up command map to start nodes
+	dbInfo                        string              // store the db info that retrieved from communal storage
+	restorePoints                 []RestorePoint      // store list existing restore points that queried from an archive
+	systemTableList               systemTableListInfo // used for staging system tables
+
+	// hosts on which the wrong authentication occurred
+	hostsWithWrongAuth []string
 }
 
-func MakeOpEngineExecContext(log vlog.Printer) OpEngineExecContext {
-	newOpEngineExecContext := OpEngineExecContext{}
-	newOpEngineExecContext.dispatcher = MakeHTTPRequestDispatcher(log)
+func makeOpEngineExecContext(logger vlog.Printer) opEngineExecContext {
+	newOpEngineExecContext := opEngineExecContext{}
+	newOpEngineExecContext.dispatcher = makeHTTPRequestDispatcher(logger)
 
 	return newOpEngineExecContext
 }

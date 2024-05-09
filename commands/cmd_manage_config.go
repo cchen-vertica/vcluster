@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -16,20 +16,25 @@
 package commands
 
 import (
-	"github.com/vertica/vcluster/vclusterops"
-	"github.com/vertica/vcluster/vclusterops/vlog"
+	"github.com/spf13/cobra"
 )
 
-type ClusterCommand interface {
-	CommandType() string
-	Parse(argv []string, log vlog.Printer) error
+/* CmdManageConfig
+ *
+ * A subcommand managing the YAML config file
+ * in the default or a specified directory.
+ *
+ * Implements ClusterCommand interface
+ */
 
-	/* TODO: Analyze information about the state of
-	 * the cluster. The information could be
-	 * cached in a config file or constructed through
-	 * cluster discovery.
-	 */
-	Analyze(log vlog.Printer) error
-	Run(vcc vclusterops.VClusterCommands) error
-	PrintUsage(string)
+func makeCmdManageConfig() *cobra.Command {
+	cmd := makeSimpleCobraCmd(
+		manageConfigSubCmd,
+		"Display or recover the contents of the config file",
+		`This subcommand displays or recovers the contents of the config file.`)
+
+	cmd.AddCommand(makeCmdConfigShow())
+	cmd.AddCommand(makeCmdConfigRecover())
+
+	return cmd
 }

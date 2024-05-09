@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -63,7 +63,7 @@ func getCertFilePathsMock() (certPaths certificatePaths, err error) {
 }
 
 func TestBuildCertsFromMemory(t *testing.T) {
-	adapter := HTTPAdapter{}
+	adapter := httpAdapter{}
 
 	// get cert and cacert using buildCertsFromFile()
 	originalFunc := getCertFilePaths
@@ -130,7 +130,7 @@ func (m *MockReadCloser) Close() error {
 }
 
 func TestHandleSuccessResponseCodes(t *testing.T) {
-	adapter := HTTPAdapter{}
+	adapter := httpAdapter{respBodyHandler: &responseBodyReader{}}
 	mockBodyReader := MockReadCloser{
 		body: []byte("success!"),
 	}
@@ -144,9 +144,10 @@ func TestHandleSuccessResponseCodes(t *testing.T) {
 }
 
 func TestHandleRFC7807Response(t *testing.T) {
-	adapter := HTTPAdapter{}
+	adapter := httpAdapter{respBodyHandler: &responseBodyReader{}}
+	detail := "Cannot access communal storage"
 	rfcErr := rfc7807.New(rfc7807.CommunalAccessError).
-		WithDetail("Cannot access communal storage")
+		WithDetail(detail)
 	b, err := json.Marshal(rfcErr)
 	assert.Equal(t, err, nil)
 	mockBodyReader := MockReadCloser{
@@ -165,7 +166,33 @@ func TestHandleRFC7807Response(t *testing.T) {
 	ok := errors.As(result.err, &problem)
 	assert.True(t, ok)
 	assert.Equal(t, 500, problem.Status)
-	assert.Equal(t, "Cannot access communal storage", problem.Detail)
+	assert.Equal(t, detail, problem.Detail)
+}
+
+func TestHandleFileDownloadErrorResponse(t *testing.T) {
+	adapter := httpAdapter{respBodyHandler: &responseBodyDownloader{destFilePath: "/never/use/me"}}
+	detail := "Something went horribly wrong and this is not a file"
+	rfcErr := rfc7807.New(rfc7807.GenericHTTPInternalServerError).
+		WithDetail(detail)
+	b, err := json.Marshal(rfcErr)
+	assert.Equal(t, err, nil)
+	mockBodyReader := MockReadCloser{
+		body: b,
+	}
+	mockResp := &http.Response{
+		StatusCode: rfcErr.Status,
+		Header:     http.Header{},
+		Body:       &mockBodyReader,
+	}
+	mockResp.Header.Add("Content-Type", rfc7807.ContentType)
+	result := adapter.generateResult(mockResp)
+	assert.Equal(t, result.status, FAILURE)
+	assert.NotEqual(t, result.err, nil)
+	problem := &rfc7807.VProblem{}
+	ok := errors.As(result.err, &problem)
+	assert.True(t, ok)
+	assert.Equal(t, 500, problem.Status)
+	assert.Equal(t, detail, problem.Detail)
 }
 
 func TestHandleGenericErrorResponse(t *testing.T) {
@@ -178,7 +205,7 @@ func TestHandleGenericErrorResponse(t *testing.T) {
 		Header:     http.Header{},
 		Body:       &mockBodyReader,
 	}
-	adapter := HTTPAdapter{}
+	adapter := httpAdapter{respBodyHandler: &responseBodyReader{}}
 	result := adapter.generateResult(mockResp)
 	assert.Equal(t, result.status, FAILURE)
 	assert.NotEqual(t, result.err, nil)

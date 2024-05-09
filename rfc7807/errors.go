@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -92,6 +92,11 @@ var (
 		"Internal error while persisting spread encryption key",
 		http.StatusInternalServerError,
 	)
+	GenericShowRestorePointsFailure = newProblemID(
+		path.Join(errorEndpointsPrefix, "internal-show-restore-points-failure"),
+		"Internal error while showing restore points",
+		http.StatusInternalServerError,
+	)
 	SubclusterNotFound = newProblemID(
 		path.Join(errorEndpointsPrefix, "subcluster-not-found"),
 		"Subcluster is not found",
@@ -150,6 +155,56 @@ var (
 	InternalVerticaDownloadFileFailure = newProblemID(
 		path.Join(errorEndpointsPrefix, "internal-vertica-download-file-failure"),
 		"Internal error while running Vertica download file",
+		http.StatusInternalServerError,
+	)
+	CreateDirectoryPermissionDenied = newProblemID(
+		path.Join(errorEndpointsPrefix, "create-directory-permission-denied"),
+		"Permission denied while creating directories",
+		http.StatusInternalServerError,
+	)
+	CreateDirectoryExistError = newProblemID(
+		path.Join(errorEndpointsPrefix, "create-directory-exist-error"),
+		"Directories already exist while creating directories",
+		http.StatusInternalServerError,
+	)
+	CreateDirectoryInvalidPath = newProblemID(
+		path.Join(errorEndpointsPrefix, "create-directory-invalid-path"),
+		"Found invalid directory paths while creating directories",
+		http.StatusBadRequest,
+	)
+	CreateDirectoryParentDirectoryExists = newProblemID(
+		path.Join(errorEndpointsPrefix, "create-directory-parent-directory-exists"),
+		"Parent directories already exist while creating directories",
+		http.StatusInternalServerError,
+	)
+	CreateDirectoryParentDirectoryNoWritePermission = newProblemID(
+		path.Join(errorEndpointsPrefix, "create-directory-parent-directory-no-write-permission"),
+		"No write permission on parent directories while creating directories",
+		http.StatusInternalServerError,
+	)
+	CreateDirectoryNoWritePermission = newProblemID(
+		path.Join(errorEndpointsPrefix, "create-directory-no-write-permission"),
+		"No write permission on directories while creating directories",
+		http.StatusInternalServerError,
+	)
+	NonAbsolutePathError = newProblemID(
+		path.Join(errorEndpointsPrefix, "non-absolute-path-error"),
+		"Target path is not an absolute path",
+		http.StatusBadRequest,
+	)
+	AuthenticationError = newProblemID(
+		path.Join(errorEndpointsPrefix, "unauthorized-request"),
+		"Unauthorized-request",
+		http.StatusUnauthorized,
+	)
+	CatalogPathNotExistError = newProblemID(
+		path.Join(errorEndpointsPrefix, "catalog-path-not-exist-error"),
+		"Target path does not exist",
+		http.StatusBadRequest,
+	)
+	CECatalogDirEmptyError = newProblemID(
+		path.Join(errorEndpointsPrefix, "catalog-dir-empty-error"),
+		"Target directory is empty",
 		http.StatusInternalServerError,
 	)
 )

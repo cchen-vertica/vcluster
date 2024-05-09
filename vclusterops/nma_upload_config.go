@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -21,11 +21,10 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-type NMAUploadConfigOp struct {
-	OpBase
+type nmaUploadConfigOp struct {
+	opBase
 	catalogPathMap     map[string]string
 	endpoint           string
 	fileContent        *string
@@ -48,7 +47,6 @@ type uploadConfigRequestData struct {
 // To add nodes to the DB, use the bootstrapHost value for sourceConfigHost, a list of newly added nodes
 // for newNodeHosts and provide a nil value for hosts.
 func makeNMAUploadConfigOp(
-	log vlog.Printer,
 	opName string,
 	sourceConfigHost []string, // source host for transferring configuration files, specifically, it is
 	// 1. the bootstrap host when creating the database
@@ -57,21 +55,25 @@ func makeNMAUploadConfigOp(
 	endpoint string,
 	fileContent *string,
 	vdb *VCoordinationDatabase,
-) NMAUploadConfigOp {
-	nmaUploadConfigOp := NMAUploadConfigOp{}
-	nmaUploadConfigOp.name = opName
-	nmaUploadConfigOp.log = log.WithName(nmaUploadConfigOp.name)
-	nmaUploadConfigOp.endpoint = endpoint
-	nmaUploadConfigOp.fileContent = fileContent
-	nmaUploadConfigOp.catalogPathMap = make(map[string]string)
-	nmaUploadConfigOp.sourceConfigHost = sourceConfigHost
-	nmaUploadConfigOp.destHosts = targetHosts
-	nmaUploadConfigOp.vdb = vdb
+) nmaUploadConfigOp {
+	op := nmaUploadConfigOp{}
+	op.name = opName
+	op.endpoint = endpoint
+	if op.endpoint == verticaConf {
+		op.description = "Send contents of vertica.conf to nodes"
+	} else if op.endpoint == spreadConf {
+		op.description = "Send contents of spread.conf to nodes"
+	}
+	op.fileContent = fileContent
+	op.catalogPathMap = make(map[string]string)
+	op.sourceConfigHost = sourceConfigHost
+	op.destHosts = targetHosts
+	op.vdb = vdb
 
-	return nmaUploadConfigOp
+	return op
 }
 
-func (op *NMAUploadConfigOp) setupRequestBody(hosts []string) error {
+func (op *nmaUploadConfigOp) setupRequestBody(hosts []string) error {
 	op.hostRequestBodyMap = make(map[string]string)
 
 	for _, host := range hosts {
@@ -90,11 +92,11 @@ func (op *NMAUploadConfigOp) setupRequestBody(hosts []string) error {
 	return nil
 }
 
-func (op *NMAUploadConfigOp) setupClusterHTTPRequest(hosts []string) error {
+func (op *nmaUploadConfigOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildNMAEndpoint(op.endpoint)
+		httpRequest.buildNMAEndpoint(op.endpoint)
 		httpRequest.RequestData = op.hostRequestBodyMap[host]
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
 	}
@@ -102,18 +104,30 @@ func (op *NMAUploadConfigOp) setupClusterHTTPRequest(hosts []string) error {
 	return nil
 }
 
-func (op *NMAUploadConfigOp) prepare(execContext *OpEngineExecContext) error {
+func (op *nmaUploadConfigOp) prepare(execContext *opEngineExecContext) error {
 	op.catalogPathMap = make(map[string]string)
 	// If any node's info is available, we set catalogPathMap from node's info.
 	// This case is used for restarting nodes operation.
 	// Otherwise, we set catalogPathMap from the catalog editor (start_db, create_db).
 	if op.vdb == nil || len(op.vdb.HostNodeMap) == 0 {
+		nmaVDB := execContext.nmaVDatabase
 		if op.sourceConfigHost == nil {
-			//  if the host with the highest catalog version for starting a database or starting nodes is nil value
-			// 	we identify the hosts that need to be synchronized.
-			hostsWithLatestCatalog := execContext.hostsWithLatestCatalog
-			if len(hostsWithLatestCatalog) == 0 {
-				return fmt.Errorf("could not find at least one host with the latest catalog")
+			var hostsWithLatestCatalog []string
+			// If SpreadEncryption is enabled, synchronize the catalog of the primary node with
+			// the latest catalog to the rest of the nodes (both primary and secondary nodes).
+			if nmaVDB.SpreadEncryption != "" {
+				hostsWithLatestCatalog = getPrimaryHostsWithLatestCatalog(&nmaVDB, execContext.hostsWithLatestCatalog, execContext)
+				if len(hostsWithLatestCatalog) == 0 {
+					return fmt.Errorf("could not find at least one primary host with the latest catalog")
+				}
+				hostsWithLatestCatalog = hostsWithLatestCatalog[:1]
+			} else {
+				//  if the host with the highest catalog version for starting a database or starting nodes is nil value
+				// 	we identify the hosts that need to be synchronized.
+				hostsWithLatestCatalog = execContext.hostsWithLatestCatalog
+				if len(hostsWithLatestCatalog) == 0 {
+					return fmt.Errorf("could not find at least one host with the latest catalog")
+				}
 			}
 			hostsNeedCatalogSync := util.SliceDiff(op.destHosts, hostsWithLatestCatalog)
 			// Update the hosts that need to synchronize the catalog
@@ -121,7 +135,7 @@ func (op *NMAUploadConfigOp) prepare(execContext *OpEngineExecContext) error {
 			// If no hosts to upload, skip this operation. This can happen if all
 			// hosts have the latest catalog.
 			if len(op.hosts) == 0 {
-				op.log.Info("no hosts require an upload, skipping the operation")
+				op.logger.Info("no hosts require an upload, skipping the operation")
 				op.skipExecute = true
 				return nil
 			}
@@ -129,7 +143,6 @@ func (op *NMAUploadConfigOp) prepare(execContext *OpEngineExecContext) error {
 			op.hosts = util.SliceDiff(op.destHosts, op.sourceConfigHost)
 		}
 		// Update the catalogPathMap for next upload operation's steps from information of catalog editor
-		nmaVDB := execContext.nmaVDatabase
 		err := updateCatalogPathMapFromCatalogEditor(op.hosts, &nmaVDB, op.catalogPathMap)
 		if err != nil {
 			return fmt.Errorf("failed to get catalog paths from catalog editor: %w", err)
@@ -147,12 +160,12 @@ func (op *NMAUploadConfigOp) prepare(execContext *OpEngineExecContext) error {
 	if err != nil {
 		return err
 	}
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *NMAUploadConfigOp) execute(execContext *OpEngineExecContext) error {
+func (op *nmaUploadConfigOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -160,11 +173,11 @@ func (op *NMAUploadConfigOp) execute(execContext *OpEngineExecContext) error {
 	return op.processResult(execContext)
 }
 
-func (op *NMAUploadConfigOp) finalize(_ *OpEngineExecContext) error {
+func (op *nmaUploadConfigOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }
 
-func (op *NMAUploadConfigOp) processResult(_ *OpEngineExecContext) error {
+func (op *nmaUploadConfigOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {

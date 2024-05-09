@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -17,41 +17,39 @@ package vclusterops
 
 import (
 	"errors"
-
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-type NMAHealthOp struct {
-	OpBase
+type nmaHealthOp struct {
+	opBase
 }
 
-func makeNMAHealthOp(log vlog.Printer, hosts []string) NMAHealthOp {
-	nmaHealthOp := NMAHealthOp{}
-	nmaHealthOp.name = "NMAHealthOp"
-	nmaHealthOp.log = log.WithName(nmaHealthOp.name)
-	nmaHealthOp.hosts = hosts
-	return nmaHealthOp
+func makeNMAHealthOp(hosts []string) nmaHealthOp {
+	op := nmaHealthOp{}
+	op.name = "NMAHealthOp"
+	op.description = "Check NMA service health"
+	op.hosts = hosts
+	return op
 }
 
 // setupClusterHTTPRequest works as the module setup in Admintools
-func (op *NMAHealthOp) setupClusterHTTPRequest(hosts []string) error {
+func (op *nmaHealthOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = GetMethod
-		httpRequest.BuildNMAEndpoint("health")
+		httpRequest.buildNMAEndpoint("health")
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
 	}
 
 	return nil
 }
 
-func (op *NMAHealthOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+func (op *nmaHealthOp) prepare(execContext *opEngineExecContext) error {
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *NMAHealthOp) execute(execContext *OpEngineExecContext) error {
+func (op *nmaHealthOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -59,11 +57,11 @@ func (op *NMAHealthOp) execute(execContext *OpEngineExecContext) error {
 	return op.processResult(execContext)
 }
 
-func (op *NMAHealthOp) finalize(_ *OpEngineExecContext) error {
+func (op *nmaHealthOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }
 
-func (op *NMAHealthOp) processResult(_ *OpEngineExecContext) error {
+func (op *nmaHealthOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)

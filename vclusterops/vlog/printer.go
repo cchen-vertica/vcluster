@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -33,11 +33,14 @@ const (
 )
 
 // Printer is a wrapper for the logger API that handles dual logging to the log
-// and stdout. It reimplements all of the APIs from logr but adds additional
-// ones to print messages to stdout.
+// and stdout. It reimplements all of the APIs from logr but adds two additional
+// members: one is for printing messages to stdout, and the other one is for identifying
+// where the logger came from.
 type Printer struct {
 	Log           logr.Logger
 	LogToFileOnly bool
+	// ForCli can indicate if vclusterops is called from vcluster cli or other clients
+	ForCli bool
 }
 
 // WithName will construct a new printer with the logger set with an additional
@@ -46,6 +49,7 @@ func (p *Printer) WithName(logName string) Printer {
 	return Printer{
 		Log:           p.Log.WithName(logName),
 		LogToFileOnly: p.LogToFileOnly,
+		ForCli:        p.ForCli,
 	}
 }
 
@@ -109,7 +113,7 @@ func escapeSpecialCharacters(message string) string {
 func (p *Printer) printlnCond(label, msg string) {
 	// Message is only printed if we are logging to a file only. Otherwise, it
 	// would be duplicated in the log.
-	if p.LogToFileOnly {
+	if p.LogToFileOnly && isVerboseOutputEnabled() {
 		fmt.Printf("%s%s\n", label, msg)
 	}
 }
@@ -139,9 +143,15 @@ func logMaskedArgParseHelper(inputArgv []string) (maskedPairs []string) {
 		maskedValue   = "******"
 	)
 	// We need to mask any parameters containing sensitive information
+	// with value format k=v,k=v,k=v...
 	targetMaskedArg := map[string]bool{
 		"--config-param": true,
 	}
+	// some params have simple value format v
+	targetMaskedSimpleArg := map[string]bool{
+		"--password": true,
+	}
+
 	for i := 0; i < len(inputArgv); i++ {
 		if targetMaskedArg[inputArgv[i]] && i+1 < len(inputArgv) {
 			pairs := strings.Split(inputArgv[i+1], ",")
@@ -161,6 +171,9 @@ func logMaskedArgParseHelper(inputArgv []string) (maskedPairs []string) {
 				}
 			}
 			i++ // Skip the next arg since it has been masked
+		} else if targetMaskedSimpleArg[inputArgv[i]] && i+1 < len(inputArgv) {
+			maskedPairs = append(maskedPairs, inputArgv[i], maskedValue)
+			i++ // Skip the next arg since it has been masked
 		} else {
 			maskedPairs = append(maskedPairs, inputArgv[i])
 		}
@@ -168,7 +181,7 @@ func logMaskedArgParseHelper(inputArgv []string) (maskedPairs []string) {
 	return maskedPairs
 }
 
-// setupOrDie will setup the logging for vcluster CLI. One exit, p.Log will
+// setupOrDie will setup the logging for vcluster CLI. On exit, p.Log will
 // be set.
 func (p *Printer) SetupOrDie(logFile string) {
 	// The vcluster library uses logr as the logging API. We use Uber's zap
@@ -202,4 +215,8 @@ func (p *Printer) SetupOrDie(logFile string) {
 	}
 	p.Log = zapr.NewLogger(zapLg)
 	p.Log.Info("Successfully started logger", "logFile", logFile)
+}
+
+func isVerboseOutputEnabled() bool {
+	return os.Getenv("VERBOSE_OUTPUT") == "yes"
 }

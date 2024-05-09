@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -21,70 +21,75 @@ import (
 	"sync"
 	"time"
 
+	"github.com/theckman/yacspin"
 	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-type AdapterPool struct {
-	log vlog.Printer
+type adapterPool struct {
+	logger vlog.Printer
 	// map from host to HTTPAdapter
-	connections map[string]Adapter
+	connections map[string]adapter
 }
 
 var (
-	poolInstance AdapterPool
+	poolInstance adapterPool
 	once         sync.Once
 )
 
 // return a singleton instance of the AdapterPool
-func getPoolInstance(log vlog.Printer) AdapterPool {
+func getPoolInstance(logger vlog.Printer) adapterPool {
 	/* if once.Do(f) is called multiple times,
 	 * only the first call will invoke f,
 	 * even if f has a different value in each invocation.
 	 * Reference: https://pkg.go.dev/sync#Once
 	 */
 	once.Do(func() {
-		poolInstance = makeAdapterPool(log)
+		poolInstance = makeAdapterPool(logger)
 	})
 
 	return poolInstance
 }
 
-func makeAdapterPool(log vlog.Printer) AdapterPool {
-	newAdapterPool := AdapterPool{}
-	newAdapterPool.connections = make(map[string]Adapter)
-	newAdapterPool.log = log.WithName("AdapterPool")
+func makeAdapterPool(logger vlog.Printer) adapterPool {
+	newAdapterPool := adapterPool{}
+	newAdapterPool.connections = make(map[string]adapter)
+	newAdapterPool.logger = logger.WithName("AdapterPool")
 	return newAdapterPool
 }
 
 type adapterToRequest struct {
-	adapter Adapter
-	request HostHTTPRequest
+	adapter adapter
+	request hostHTTPRequest
 }
 
-func (pool *AdapterPool) sendRequest(clusterHTTPRequest *ClusterHTTPRequest) error {
-	pool.log.Info("Adapter pool's sendRequest is called")
+func (pool *adapterPool) sendRequest(httpRequest *clusterHTTPRequest, spinner *yacspin.Spinner) error {
 	// build a collection of adapter to request
 	// we need this step as a host may not be in the pool
 	// in that case, we should not proceed
 	var adapterToRequestCollection []adapterToRequest
-	for host := range clusterHTTPRequest.RequestCollection {
-		request := clusterHTTPRequest.RequestCollection[host]
-		adapter, ok := pool.connections[host]
+	for host := range httpRequest.RequestCollection {
+		request := httpRequest.RequestCollection[host]
+		adpt, ok := pool.connections[host]
 		if !ok {
 			return fmt.Errorf("host %s is not found in the adapter pool", host)
 		}
-		ar := adapterToRequest{adapter: adapter, request: request}
+		ar := adapterToRequest{adapter: adpt, request: request}
 		adapterToRequestCollection = append(adapterToRequestCollection, ar)
 	}
 
 	hostCount := len(adapterToRequestCollection)
 
 	// result channel to collect result from each host
-	resultChannel := make(chan HostHTTPResult, hostCount)
+	resultChannel := make(chan hostHTTPResult, hostCount)
 
-	// use context to check whether a step has completed
-	ctx, cancel := context.WithCancel(context.Background())
-	go progressCheck(ctx, clusterHTTPRequest.Name, pool.log)
+	// only track the progress of HTTP requests for vcluster CLI
+	if pool.logger.ForCli {
+		// use context to check whether a step has completed
+		ctx, cancelCtx := context.WithCancel(context.Background())
+		go progressCheck(ctx, httpRequest.Name, pool.logger, spinner)
+		// cancel the progress check context when the result channel is closed
+		defer cancelCtx()
+	}
 
 	for i := 0; i < len(adapterToRequestCollection); i++ {
 		ar := adapterToRequestCollection[i]
@@ -97,24 +102,21 @@ func (pool *AdapterPool) sendRequest(clusterHTTPRequest *ClusterHTTPRequest) err
 	// handle results
 	// we expect to receive the same number of results from the channel as the number of hosts
 	// before proceeding to the next steps
-	clusterHTTPRequest.ResultCollection = make(map[string]HostHTTPResult)
+	httpRequest.ResultCollection = make(map[string]hostHTTPResult)
 	for i := 0; i < hostCount; i++ {
 		result, ok := <-resultChannel
 		if ok {
-			clusterHTTPRequest.ResultCollection[result.host] = result
+			httpRequest.ResultCollection[result.host] = result
 		}
 	}
 	close(resultChannel)
-
-	// cancel the progress check context when the result channel is closed
-	cancel()
 
 	return nil
 }
 
 // progressCheck checks whether a step (operation) has been completed.
 // Elapsed time of the step in seconds will be displayed.
-func progressCheck(ctx context.Context, name string, log vlog.Printer) {
+func progressCheck(ctx context.Context, name string, logger vlog.Printer, spinner *yacspin.Spinner) {
 	const progressCheckInterval = 5
 	startTime := time.Now()
 
@@ -130,8 +132,11 @@ func progressCheck(ctx context.Context, name string, log vlog.Printer) {
 			return
 		case tickTime := <-ticker.C:
 			elapsedTime := tickTime.Sub(startTime)
-			log.PrintInfo("[%s] is still running. %.f seconds spent at this step.",
+			logger.PrintInfo("[%s] is still running. %.f seconds spent at this step.",
 				name, elapsedTime.Seconds())
+			if spinner != nil {
+				spinner.Message(fmt.Sprintf("%.f seconds spent at this step", elapsedTime.Seconds()))
+			}
 		}
 	}
 }

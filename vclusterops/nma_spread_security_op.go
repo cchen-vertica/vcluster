@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -26,7 +26,7 @@ import (
 )
 
 type nmaSpreadSecurityOp struct {
-	OpBase
+	opBase
 	catalogPathMap map[string]string
 	keyType        string
 }
@@ -41,14 +41,15 @@ const spreadKeyTypeVertica = "vertica"
 // makeNMASpreadSecurityOp will create the op to set or rotate the key for
 // spread encryption.
 func makeNMASpreadSecurityOp(
-	log vlog.Printer,
+	logger vlog.Printer,
 	keyType string,
 ) nmaSpreadSecurityOp {
 	return nmaSpreadSecurityOp{
-		OpBase: OpBase{
-			log:   log,
-			name:  "NMASpreadSecurityOp",
-			hosts: nil, // We always set this at runtime from read catalog editor
+		opBase: opBase{
+			logger:      logger.WithName("NMASpreadSecurityOp"),
+			name:        "NMASpreadSecurityOp",
+			description: "Set new spread encryption key",
+			hosts:       nil, // We always set this at runtime from read catalog editor
 		},
 		catalogPathMap: nil, // Set at runtime after reading the catalog editor
 		keyType:        keyType,
@@ -90,9 +91,9 @@ func (op *nmaSpreadSecurityOp) setupRequestBody() (map[string]string, error) {
 
 func (op *nmaSpreadSecurityOp) setupClusterHTTPRequest(hostRequestBodyMap map[string]string) error {
 	for host, requestBody := range hostRequestBodyMap {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildNMAEndpoint("catalog/spread-security")
+		httpRequest.buildNMAEndpoint("catalog/spread-security")
 		httpRequest.RequestData = requestBody
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
 	}
@@ -100,7 +101,7 @@ func (op *nmaSpreadSecurityOp) setupClusterHTTPRequest(hostRequestBodyMap map[st
 	return nil
 }
 
-func (op *nmaSpreadSecurityOp) prepare(execContext *OpEngineExecContext) error {
+func (op *nmaSpreadSecurityOp) prepare(execContext *opEngineExecContext) error {
 	if err := op.setRuntimeParms(execContext); err != nil {
 		return err
 	}
@@ -108,12 +109,12 @@ func (op *nmaSpreadSecurityOp) prepare(execContext *OpEngineExecContext) error {
 	if err != nil {
 		return err
 	}
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(hostRequestBodyMap)
 }
 
-func (op *nmaSpreadSecurityOp) execute(execContext *OpEngineExecContext) error {
+func (op *nmaSpreadSecurityOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -121,11 +122,11 @@ func (op *nmaSpreadSecurityOp) execute(execContext *OpEngineExecContext) error {
 	return op.processResult(execContext)
 }
 
-func (op *nmaSpreadSecurityOp) finalize(_ *OpEngineExecContext) error {
+func (op *nmaSpreadSecurityOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }
 
-func (op *nmaSpreadSecurityOp) processResult(_ *OpEngineExecContext) error {
+func (op *nmaSpreadSecurityOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
@@ -141,12 +142,22 @@ func (op *nmaSpreadSecurityOp) processResult(_ *OpEngineExecContext) error {
 }
 
 // setRuntimeParms will set options based on runtime context.
-func (op *nmaSpreadSecurityOp) setRuntimeParms(execContext *OpEngineExecContext) error {
-	// Always pull the hosts at runtime using the node with the latest catalog.
+func (op *nmaSpreadSecurityOp) setRuntimeParms(execContext *opEngineExecContext) error {
+	// A core dump can happen if we send the /v1/catalog/spread-security settings to a secondary node.
+	// Need to use the primary node because fetching global settings to perform a catalog lookup isn't available on a secondary node.
+	// Always pull the hosts at runtime using the primary node with the latest catalog.
 	// Need to use the ones with the latest catalog because those are the hosts
 	// that we copy the spread.conf from during start db.
-	op.hosts = execContext.hostsWithLatestCatalog
-
+	hostsWithLatestCatalog := execContext.hostsWithLatestCatalog
+	if len(hostsWithLatestCatalog) == 0 {
+		return fmt.Errorf("could not find at least one host with the latest catalog")
+	}
+	// Use only a primary host with the latest catalog as the sourceConfigHost
+	primaryHostsWithLatestCatalog := getPrimaryHostsWithLatestCatalog(&execContext.nmaVDatabase, hostsWithLatestCatalog, execContext)
+	if len(primaryHostsWithLatestCatalog) == 0 {
+		return fmt.Errorf("could not find at least one primary host with the latest catalog")
+	}
+	op.hosts = []string{primaryHostsWithLatestCatalog[0]}
 	op.catalogPathMap = make(map[string]string, len(op.hosts))
 	err := updateCatalogPathMapFromCatalogEditor(op.hosts, &execContext.nmaVDatabase, op.catalogPathMap)
 	if err != nil {
@@ -176,7 +187,7 @@ func (op *nmaSpreadSecurityOp) generateSecurityDetails() (string, error) {
 	}
 	// Note, we log the key ID for info purposes and is safe because it isn't
 	// sensitive. NEVER log the spreadKey.
-	op.log.Info("generating spread key", "keyID", keyID)
+	op.logger.Info("generating spread key", "keyID", keyID)
 	return fmt.Sprintf(`{\"%s\":\"%s\"}`, keyID, spreadKey), nil
 }
 

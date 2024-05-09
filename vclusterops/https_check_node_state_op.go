@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -20,43 +20,42 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-type HTTPCheckNodeStateOp struct {
-	OpBase
-	OpHTTPSBase
+type httpsCheckNodeStateOp struct {
+	opBase
+	opHTTPSBase
 }
 
-func makeHTTPCheckNodeStateOp(log vlog.Printer, hosts []string,
+func makeHTTPSCheckNodeStateOp(hosts []string,
 	useHTTPPassword bool,
 	userName string,
 	httpsPassword *string,
-) (HTTPCheckNodeStateOp, error) {
-	nodeStateChecker := HTTPCheckNodeStateOp{}
-	nodeStateChecker.log = log.WithName(nodeStateChecker.name)
-	nodeStateChecker.name = "HTTPCheckNodeStateOp"
+) (httpsCheckNodeStateOp, error) {
+	op := httpsCheckNodeStateOp{}
+	op.name = "HTTPCheckNodeStateOp"
+	op.description = "Check node state from running database"
 	// The hosts are the ones we are going to talk to.
 	// They can be a subset of the actual host information that we return,
 	// as if any of the hosts is responsive, spread can give us the info of all nodes
-	nodeStateChecker.hosts = hosts
-	nodeStateChecker.useHTTPPassword = useHTTPPassword
+	op.hosts = hosts
+	op.useHTTPPassword = useHTTPPassword
 
-	err := util.ValidateUsernameAndPassword(nodeStateChecker.name, useHTTPPassword, userName)
+	err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
 	if err != nil {
-		return nodeStateChecker, err
+		return op, err
 	}
 
-	nodeStateChecker.userName = userName
-	nodeStateChecker.httpsPassword = httpsPassword
-	return nodeStateChecker, nil
+	op.userName = userName
+	op.httpsPassword = httpsPassword
+	return op, nil
 }
 
-func (op *HTTPCheckNodeStateOp) setupClusterHTTPRequest(hosts []string) error {
+func (op *httpsCheckNodeStateOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = GetMethod
-		httpRequest.BuildHTTPSEndpoint("nodes")
+		httpRequest.buildHTTPSEndpoint("nodes")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -67,13 +66,13 @@ func (op *HTTPCheckNodeStateOp) setupClusterHTTPRequest(hosts []string) error {
 	return nil
 }
 
-func (op *HTTPCheckNodeStateOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+func (op *httpsCheckNodeStateOp) prepare(execContext *opEngineExecContext) error {
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *HTTPCheckNodeStateOp) execute(execContext *OpEngineExecContext) error {
+func (op *httpsCheckNodeStateOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -81,15 +80,16 @@ func (op *HTTPCheckNodeStateOp) execute(execContext *OpEngineExecContext) error 
 	return op.processResult(execContext)
 }
 
-func (op *HTTPCheckNodeStateOp) processResult(execContext *OpEngineExecContext) error {
+func (op *httpsCheckNodeStateOp) processResult(execContext *opEngineExecContext) error {
 	var allErrs error
 	respondingNodeCount := 0
 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
-		if result.IsUnauthorizedRequest() {
-			op.log.PrintError("[%s] unauthorized request: %s", op.name, result.content)
+		if result.isUnauthorizedRequest() {
+			op.logger.PrintError("[%s] unauthorized request: %s", op.name, result.content)
+			execContext.hostsWithWrongAuth = append(execContext.hostsWithWrongAuth, host)
 			// return here because we assume that
 			// we will get the same error across other nodes
 			allErrs = errors.Join(allErrs, result.err)
@@ -98,8 +98,8 @@ func (op *HTTPCheckNodeStateOp) processResult(execContext *OpEngineExecContext) 
 
 		if !result.isPassing() {
 			// for any error, we continue to the next node
-			if result.IsInternalError() {
-				op.log.PrintError("[%s] internal error of the /nodes endpoint: %s", op.name, result.content)
+			if result.isInternalError() {
+				op.logger.PrintError("[%s] internal error of the /nodes endpoint: %s", op.name, result.content)
 				// At internal error originated from the server, so its a
 				// response, just not a successful one.
 				respondingNodeCount++
@@ -110,35 +110,28 @@ func (op *HTTPCheckNodeStateOp) processResult(execContext *OpEngineExecContext) 
 
 		// parse the /nodes endpoint response
 		respondingNodeCount++
-		nodesInfo := NodesInfo{}
-		err := op.parseAndCheckResponse(host, result.content, &nodesInfo)
+		nodesStates := nodesStateInfo{}
+		err := op.parseAndCheckResponse(host, result.content, &nodesStates)
 		if err != nil {
 			err = fmt.Errorf("[%s] fail to parse result on host %s: %w",
 				op.name, host, err)
 			allErrs = errors.Join(allErrs, err)
 			continue
 		}
+
+		nodesInfo := nodesInfo{}
+		for _, node := range nodesStates.NodeList {
+			n := node.asNodeInfoWithoutVer()
+			nodesInfo.NodeList = append(nodesInfo.NodeList, n)
+		}
 		// successful case, write the result into exec context
 		execContext.nodesInfo = nodesInfo.NodeList
 		return nil
 	}
 
-	// If none of the requests succeed on any node, we
-	// can assume that all nodes are down.
-	if respondingNodeCount == 0 {
-		// this list is built for Go client
-		var nodeStates []NodeInfo
-		for _, host := range op.hosts {
-			nodeInfo := NodeInfo{}
-			nodeInfo.Address = host
-			nodeInfo.State = "DOWN"
-			nodeStates = append(nodeStates, nodeInfo)
-		}
-		execContext.nodesInfo = nodeStates
-	}
 	return allErrs
 }
 
-func (op *HTTPCheckNodeStateOp) finalize(_ *OpEngineExecContext) error {
+func (op *httpsCheckNodeStateOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }

@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -20,42 +20,41 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-type HTTPSReloadSpreadOp struct {
-	OpBase
-	OpHTTPSBase
+type httpsReloadSpreadOp struct {
+	opBase
+	opHTTPSBase
 }
 
-func makeHTTPSReloadSpreadOpWithInitiator(log vlog.Printer, initHosts []string,
+func makeHTTPSReloadSpreadOpWithInitiator(initHosts []string,
 	useHTTPPassword bool,
-	userName string, httpsPassword *string) (HTTPSReloadSpreadOp, error) {
-	httpsReloadSpreadOp := HTTPSReloadSpreadOp{}
-	httpsReloadSpreadOp.name = "HTTPSReloadSpreadOp"
-	httpsReloadSpreadOp.log = log.WithName(httpsReloadSpreadOp.name)
-	httpsReloadSpreadOp.hosts = initHosts
-	httpsReloadSpreadOp.useHTTPPassword = useHTTPPassword
+	userName string, httpsPassword *string) (httpsReloadSpreadOp, error) {
+	op := httpsReloadSpreadOp{}
+	op.name = "HTTPSReloadSpreadOp"
+	op.description = "Reload spread"
+	op.hosts = initHosts
+	op.useHTTPPassword = useHTTPPassword
 
-	err := util.ValidateUsernameAndPassword(httpsReloadSpreadOp.name, useHTTPPassword, userName)
+	err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
 	if err != nil {
-		return httpsReloadSpreadOp, err
+		return op, err
 	}
-	httpsReloadSpreadOp.userName = userName
-	httpsReloadSpreadOp.httpsPassword = httpsPassword
-	return httpsReloadSpreadOp, nil
+	op.userName = userName
+	op.httpsPassword = httpsPassword
+	return op, nil
 }
 
-func makeHTTPSReloadSpreadOp(log vlog.Printer, useHTTPPassword bool,
-	userName string, httpsPassword *string) (HTTPSReloadSpreadOp, error) {
-	return makeHTTPSReloadSpreadOpWithInitiator(log, nil, useHTTPPassword, userName, httpsPassword)
+func makeHTTPSReloadSpreadOp(useHTTPPassword bool,
+	userName string, httpsPassword *string) (httpsReloadSpreadOp, error) {
+	return makeHTTPSReloadSpreadOpWithInitiator(nil, useHTTPPassword, userName, httpsPassword)
 }
 
-func (op *HTTPSReloadSpreadOp) setupClusterHTTPRequest(hosts []string) error {
+func (op *httpsReloadSpreadOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildHTTPSEndpoint("config/spread/reload")
+		httpRequest.buildHTTPSEndpoint("config/spread/reload")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -66,17 +65,17 @@ func (op *HTTPSReloadSpreadOp) setupClusterHTTPRequest(hosts []string) error {
 	return nil
 }
 
-func (op *HTTPSReloadSpreadOp) prepare(execContext *OpEngineExecContext) error {
+func (op *httpsReloadSpreadOp) prepare(execContext *opEngineExecContext) error {
 	// If the host input is an empty string, we find up hosts to update the host input
 	if len(op.hosts) == 0 {
 		op.hosts = execContext.upHosts
 	}
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *HTTPSReloadSpreadOp) execute(execContext *OpEngineExecContext) error {
+func (op *httpsReloadSpreadOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -84,7 +83,7 @@ func (op *HTTPSReloadSpreadOp) execute(execContext *OpEngineExecContext) error {
 	return op.processResult(execContext)
 }
 
-func (op *HTTPSReloadSpreadOp) processResult(_ *OpEngineExecContext) error {
+func (op *httpsReloadSpreadOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
@@ -115,6 +114,6 @@ func (op *HTTPSReloadSpreadOp) processResult(_ *OpEngineExecContext) error {
 	return allErrs
 }
 
-func (op *HTTPSReloadSpreadOp) finalize(_ *OpEngineExecContext) error {
+func (op *httpsReloadSpreadOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }

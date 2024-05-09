@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -20,22 +20,21 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 type httpsGetClusterInfoOp struct {
-	OpBase
-	OpHTTPSBase
+	opBase
+	opHTTPSBase
 	dbName string
 	vdb    *VCoordinationDatabase
 }
 
-func makeHTTPSGetClusterInfoOp(log vlog.Printer, dbName string, hosts []string,
+func makeHTTPSGetClusterInfoOp(dbName string, hosts []string,
 	useHTTPPassword bool, userName string, httpsPassword *string, vdb *VCoordinationDatabase,
 ) (httpsGetClusterInfoOp, error) {
 	op := httpsGetClusterInfoOp{}
 	op.name = "HTTPSGetClusterInfoOp"
-	op.log = log.WithName(op.name)
+	op.description = "Collect cluster information"
 	op.dbName = dbName
 	op.hosts = hosts
 	op.vdb = vdb
@@ -55,9 +54,9 @@ func makeHTTPSGetClusterInfoOp(log vlog.Printer, dbName string, hosts []string,
 
 func (op *httpsGetClusterInfoOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = GetMethod
-		httpRequest.BuildHTTPSEndpoint("cluster")
+		httpRequest.buildHTTPSEndpoint("cluster")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -69,13 +68,13 @@ func (op *httpsGetClusterInfoOp) setupClusterHTTPRequest(hosts []string) error {
 	return nil
 }
 
-func (op *httpsGetClusterInfoOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+func (op *httpsGetClusterInfoOp) prepare(execContext *opEngineExecContext) error {
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *httpsGetClusterInfoOp) execute(execContext *OpEngineExecContext) error {
+func (op *httpsGetClusterInfoOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -83,42 +82,42 @@ func (op *httpsGetClusterInfoOp) execute(execContext *OpEngineExecContext) error
 	return op.processResult(execContext)
 }
 
-type ClusterStateInfo struct {
+type clusterStateInfo struct {
 	IsEon                    bool     `json:"is_eon"`
 	DBName                   string   `json:"db_name"`
 	CommunalStorageLocations []string `json:"commnual_storage_locations"`
 }
 
-func (op *httpsGetClusterInfoOp) processResult(_ *OpEngineExecContext) error {
+func (op *httpsGetClusterInfoOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
-		if result.IsUnauthorizedRequest() {
+		if result.isUnauthorizedRequest() {
 			return fmt.Errorf("[%s] wrong password/certificate for https service on host %s",
 				op.name, host)
 		}
 
 		if result.isPassing() {
 			// unmarshal the response content
-			clusterStateInfo := ClusterStateInfo{}
-			err := op.parseAndCheckResponse(host, result.content, &clusterStateInfo)
+			clusterState := clusterStateInfo{}
+			err := op.parseAndCheckResponse(host, result.content, &clusterState)
 			if err != nil {
 				allErrs = errors.Join(allErrs, err)
 				return appendHTTPSFailureError(allErrs)
 			}
 
 			// save cluster info to vdb
-			op.vdb.IsEon = clusterStateInfo.IsEon
-			op.vdb.UseDepot = clusterStateInfo.IsEon
-			op.vdb.Name = clusterStateInfo.DBName
+			op.vdb.IsEon = clusterState.IsEon
+			op.vdb.UseDepot = clusterState.IsEon
+			op.vdb.Name = clusterState.DBName
 			if op.vdb.Name != op.dbName {
 				err = fmt.Errorf(`[%s] database %s is running on host %s, rather than database %s`, op.name, op.vdb.Name, host, op.dbName)
 				allErrs = errors.Join(allErrs, err)
 				break
 			}
-			if len(clusterStateInfo.CommunalStorageLocations) > 0 {
-				op.vdb.CommunalStorageLocation = clusterStateInfo.CommunalStorageLocations[0]
+			if len(clusterState.CommunalStorageLocations) > 0 {
+				op.vdb.CommunalStorageLocation = clusterState.CommunalStorageLocations[0]
 			}
 			return nil
 		}
@@ -127,6 +126,6 @@ func (op *httpsGetClusterInfoOp) processResult(_ *OpEngineExecContext) error {
 	return appendHTTPSFailureError(allErrs)
 }
 
-func (op *httpsGetClusterInfoOp) finalize(_ *OpEngineExecContext) error {
+func (op *httpsGetClusterInfoOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }

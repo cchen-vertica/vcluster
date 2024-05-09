@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -16,29 +16,16 @@
 package commands
 
 import (
-	"fmt"
-	"os"
-
-	"github.com/vertica/vcluster/vclusterops/util"
+	"github.com/spf13/cobra"
 )
 
-type ConfigHandler struct {
-	directory *string
+func makeCmdReplication() *cobra.Command {
+	cmd := makeSimpleCobraCmd(
+		replicationSubCmd,
+		"Handle database replication",
+		`This subcommand starts database replication or displays the status of an
+in-progress replication operation.`)
 
-	CmdBase
-}
-
-func (c *ConfigHandler) validateDirectory() error {
-	if *c.directory == "" {
-		currentDir, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		*c.directory = currentDir
-	} else {
-		if err := util.AbsPathCheck(*c.directory); err != nil {
-			return fmt.Errorf("the directory must be provided as absolute path")
-		}
-	}
-	return nil
+	cmd.AddCommand(makeCmdStartReplication())
+	return cmd
 }

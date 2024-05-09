@@ -1,10 +1,23 @@
+/*
+ (c) Copyright [2023-2024] Open Text.
+ Licensed under the Apache License, Version 2.0 (the "License");
+ You may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+ http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+*/
+
 package commands
 
 import (
-	"flag"
-
+	"github.com/spf13/cobra"
 	"github.com/vertica/vcluster/vclusterops"
-	"github.com/vertica/vcluster/vclusterops/util"
 	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
@@ -18,76 +31,97 @@ type CmdDropDB struct {
 	CmdBase
 }
 
-func makeCmdDropDB() *CmdDropDB {
+func makeCmdDropDB() *cobra.Command {
 	newCmd := &CmdDropDB{}
-	newCmd.parser = flag.NewFlagSet("create_db", flag.ExitOnError)
+	opt := vclusterops.VDropDatabaseOptionsFactory()
+	newCmd.dropDBOptions = &opt
 
-	newCmd.hostListStr = newCmd.parser.String("hosts", "", "Comma-separated list of hosts to participate in database")
+	// VER-92345 update the long description about the hosts option
+	cmd := makeBasicCobraCmd(
+		newCmd,
+		dropDBSubCmd,
+		"Drop a database",
+		`This subcommand drops a stopped database.
 
-	dropDBOptions := vclusterops.VDropDatabaseOptionsFactory()
-	newCmd.ipv6 = newCmd.parser.Bool("ipv6", false, "Drop database with IPv6 hosts")
-	dropDBOptions.ForceDelete = newCmd.parser.Bool("force-delete", false, "Whether force delete directories if they are not empty")
-	dropDBOptions.ConfigDirectory = newCmd.parser.String("config-directory", "", "Directory where "+vclusterops.ConfigFileName+" is located")
+For an Eon database, communal storage is not deleted. You can recover 
+the dropped database with revive_db.
 
-	dropDBOptions.HonorUserInput = newCmd.parser.Bool("honor-user-input", false,
-		util.GetOptionalFlagMsg("Forcefully use the user's input instead of reading the options from "+vclusterops.ConfigFileName))
+The config file must be specified to retrieve host information. If --config
+is not provided, a configuration file is created in one of the following 
+locations, in order of precedence:
+- path set in VCLUSTER_CONFIG environment variable
+- /opt/vertica/config/vertica_config.yaml if running vcluster from /opt/vertica/bin
+- $HOME/.config/vcluster/vertica_config.yaml
 
-	// TODO: the following options will be processed later
-	dropDBOptions.DBName = newCmd.parser.String("db-name", "", "The name of the database to be dropped")
-	dropDBOptions.CatalogPrefix = newCmd.parser.String("catalog-path", "", "The catalog path of the database")
-	dropDBOptions.DataPrefix = newCmd.parser.String("data-path", "", "The data path of the database")
-	dropDBOptions.DepotPrefix = newCmd.parser.String("depot-path", "", "The depot path of the database")
+When the command completes, the config file is removed.
 
-	newCmd.dropDBOptions = &dropDBOptions
+To remove the local directories like catalog, depot, and data, use the 
+--force-delete option. The data deleted with this option is unrecoverable.
 
-	return newCmd
+Examples:
+  # Drop a database with config file
+  vcluster drop_db --db-name test_db \
+    --config /opt/vertica/config/vertica_cluster.yaml
+`,
+		[]string{dbNameFlag, configFlag, hostsFlag, catalogPathFlag, dataPathFlag, depotPathFlag},
+	)
+
+	// local flags
+	newCmd.setLocalFlags(cmd)
+
+	// hide flags since we expect it to come from config file, not from user input
+	hideLocalFlags(cmd, []string{hostsFlag, catalogPathFlag, dataPathFlag, depotPathFlag})
+
+	return cmd
 }
 
-func (c *CmdDropDB) CommandType() string {
-	return "drop_db"
+// setLocalFlags will set the local flags the command has
+func (c *CmdDropDB) setLocalFlags(cmd *cobra.Command) {
+	cmd.Flags().BoolVar(
+		&c.dropDBOptions.ForceDelete,
+		"force-delete",
+		false,
+		"Delete local directories like catalog, depot, and data.",
+	)
 }
 
-func (c *CmdDropDB) Parse(inputArgv []string, log vlog.Printer) error {
+func (c *CmdDropDB) Parse(inputArgv []string, logger vlog.Printer) error {
 	c.argv = inputArgv
-	err := c.ValidateParseArgv(c.CommandType(), log)
+	logger.LogArgParse(&c.argv)
+
+	return c.validateParse(logger)
+}
+
+func (c *CmdDropDB) validateParse(logger vlog.Printer) error {
+	logger.Info("Called validateParse()")
+	err := c.getCertFilesFromCertPaths(&c.dropDBOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
-
-	// for some options, we do not want to use their default values,
-	// if they are not provided in cli,
-	// reset the value of those options to nil
-	if !util.IsOptionSet(c.parser, "config-directory") {
-		c.dropDBOptions.ConfigDirectory = nil
-	}
-	if !util.IsOptionSet(c.parser, "ipv6") {
-		c.CmdBase.ipv6 = nil
-	}
-
-	return c.validateParse(log)
-}
-
-func (c *CmdDropDB) validateParse(log vlog.Printer) error {
-	if !util.IsOptionSet(c.parser, "password") {
-		c.dropDBOptions.Password = nil
-	}
-	log.Info("Called validateParse()")
 	return c.ValidateParseBaseOptions(&c.dropDBOptions.DatabaseOptions)
 }
 
-func (c *CmdDropDB) Analyze(_ vlog.Printer) error {
-	return nil
-}
-
-func (c *CmdDropDB) Run(vcc vclusterops.VClusterCommands) error {
-	vcc.Log.V(1).Info("Called method Run()")
+func (c *CmdDropDB) Run(vcc vclusterops.ClusterCommands) error {
+	vcc.V(1).Info("Called method Run()")
 
 	err := vcc.VDropDatabase(c.dropDBOptions)
 	if err != nil {
-		vcc.Log.Error(err, "failed do drop the database")
+		vcc.LogError(err, "failed do drop the database")
 		return err
 	}
 
-	vcc.Log.PrintInfo("Successfully dropped database %s\n", *c.dropDBOptions.DBName)
+	vcc.PrintInfo("Successfully dropped database %s", c.dropDBOptions.DBName)
+	// if the database is successfully dropped, the config file will be removed
+	// if failed to remove it, we will ask users to manually do it
+	err = removeConfig()
+	if err != nil {
+		vcc.PrintWarning("Fail to remove config file %q, "+
+			"please manually do it. Details: %v", c.dropDBOptions.ConfigPath, err)
+	}
 	return nil
+}
+
+// SetDatabaseOptions will assign a vclusterops.DatabaseOptions instance to the one in CmdDropDB
+func (c *CmdDropDB) SetDatabaseOptions(opt *vclusterops.DatabaseOptions) {
+	c.dropDBOptions.DatabaseOptions = *opt
 }

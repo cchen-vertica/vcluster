@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -32,13 +32,18 @@ const (
 	DefaultLoadCatalogTimeoutSeconds = 3600
 	DefaultStatePollingTimeout       = 1200
 	DefaultLargeCluster              = -1
+	DefaultP2p                       = true
+	DefaultSpreadLoggingLevel        = -1
 	MaxLargeCluster                  = 120
 	MinDepotSize                     = 0
 	MaxDepotSize                     = 100
 	DefaultDrainSeconds              = 60
+	DefaultControlSetSize            = -1
 	NodeUpState                      = "UP"
 	NodeDownState                    = "DOWN"
+	NodeUnknownState                 = "UNKNOWN" // this is for sandbox only
 	SuppressHelp                     = "SUPPRESS_HELP"
+	MainClusterSandbox               = ""
 )
 
 var RestartPolicyList = []string{"never", DefaultRestartPolicy, "always"}

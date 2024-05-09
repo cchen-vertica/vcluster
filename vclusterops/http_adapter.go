@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -32,16 +32,44 @@ import (
 	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-type HTTPAdapter struct {
-	OpBase
-	host string
+type httpAdapter struct {
+	opBase
+	host            string
+	respBodyHandler responseBodyHandler
 }
 
-func MakeHTTPAdapter(log vlog.Printer) HTTPAdapter {
-	newHTTPAdapter := HTTPAdapter{}
+func makeHTTPAdapter(logger vlog.Printer) httpAdapter {
+	newHTTPAdapter := httpAdapter{}
 	newHTTPAdapter.name = "HTTPAdapter"
-	newHTTPAdapter.log = log.WithName(newHTTPAdapter.name)
+	newHTTPAdapter.logger = logger.WithName(newHTTPAdapter.name)
+	newHTTPAdapter.respBodyHandler = &responseBodyReader{}
 	return newHTTPAdapter
+}
+
+// makeHTTPDownloadAdapter creates an HTTP adapter which will
+// download a response body to a file via streaming read and
+// buffered write, rather than copying the body to memory.
+func makeHTTPDownloadAdapter(logger vlog.Printer,
+	destFilePath string) httpAdapter {
+	newHTTPAdapter := makeHTTPAdapter(logger)
+	newHTTPAdapter.respBodyHandler = &responseBodyDownloader{
+		logger,
+		destFilePath,
+	}
+	return newHTTPAdapter
+}
+
+type responseBodyHandler interface {
+	processResponseBody(resp *http.Response) (string, error)
+}
+
+// empty struct for default behavior of reading response body into memory
+type responseBodyReader struct{}
+
+// for downloading response body to file instead of reading into memory
+type responseBodyDownloader struct {
+	logger       vlog.Printer
+	destFilePath string
 }
 
 const (
@@ -57,7 +85,7 @@ type certificatePaths struct {
 	caFile   string
 }
 
-func (adapter *HTTPAdapter) sendRequest(request *HostHTTPRequest, resultChannel chan<- HostHTTPResult) {
+func (adapter *httpAdapter) sendRequest(request *hostHTTPRequest, resultChannel chan<- hostHTTPResult) {
 	// build query params
 	queryParams := buildQueryParamString(request.QueryParams)
 
@@ -74,7 +102,7 @@ func (adapter *HTTPAdapter) sendRequest(request *HostHTTPRequest, resultChannel 
 		port,
 		request.Endpoint,
 		queryParams)
-	adapter.log.Info("Request URL", "URL", requestURL)
+	adapter.logger.Info("Request URL", "URL", requestURL)
 
 	// whether use password (for HTTPS endpoints only)
 	usePassword, err := whetherUsePassword(request)
@@ -106,6 +134,8 @@ func (adapter *HTTPAdapter) sendRequest(request *HostHTTPRequest, resultChannel 
 		resultChannel <- adapter.makeExceptionResult(err)
 		return
 	}
+	// close the connection after sending the request (for clients)
+	req.Close = true
 
 	// set username and password
 	// which is only used for HTTPS endpoints
@@ -127,18 +157,47 @@ func (adapter *HTTPAdapter) sendRequest(request *HostHTTPRequest, resultChannel 
 	resultChannel <- adapter.generateResult(resp)
 }
 
-func (adapter *HTTPAdapter) generateResult(resp *http.Response) HostHTTPResult {
-	bodyString, err := adapter.readResponseBody(resp)
+func (adapter *httpAdapter) generateResult(resp *http.Response) hostHTTPResult {
+	bodyString, err := adapter.respBodyHandler.processResponseBody(resp)
 	if err != nil {
 		return adapter.makeExceptionResult(err)
 	}
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+	if isSuccess(resp) {
 		return adapter.makeSuccessResult(bodyString, resp.StatusCode)
 	}
 	return adapter.makeFailResult(resp.Header, bodyString, resp.StatusCode)
 }
 
-func (adapter *HTTPAdapter) readResponseBody(resp *http.Response) (bodyString string, err error) {
+func (*responseBodyReader) processResponseBody(resp *http.Response) (bodyString string, err error) {
+	return readResponseBody(resp)
+}
+
+func (downloader *responseBodyDownloader) processResponseBody(resp *http.Response) (bodyString string, err error) {
+	if isSuccess(resp) {
+		bytesWritten, err := downloader.downloadFile(resp)
+		if err != nil {
+			err = fmt.Errorf("fail to stream the response body to file %s: %w", downloader.destFilePath, err)
+		} else {
+			downloader.logger.Info("File downloaded", "File", downloader.destFilePath, "Bytes", bytesWritten)
+		}
+		return "", err
+	}
+	// in case of error, we get an RFC7807 error, not a file
+	return readResponseBody(resp)
+}
+
+// downloadFile uses buffered read/writes to download the http response body to a file
+func (downloader *responseBodyDownloader) downloadFile(resp *http.Response) (bytesWritten int64, err error) {
+	file, err := os.Create(downloader.destFilePath)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+	return io.Copy(file, resp.Body)
+}
+
+// readResponseBody attempts to read the entire contents of the http response into bodyString
+func readResponseBody(resp *http.Response) (bodyString string, err error) {
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		err = fmt.Errorf("fail to read the response body: %w", err)
@@ -149,10 +208,14 @@ func (adapter *HTTPAdapter) readResponseBody(resp *http.Response) (bodyString st
 	return bodyString, nil
 }
 
-// makeSuccessResult is a factory method for HostHTTPResult when a success
+func isSuccess(resp *http.Response) bool {
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+// makeSuccessResult is a factory method for hostHTTPResult when a success
 // response comes back from a REST endpoints.
-func (adapter *HTTPAdapter) makeSuccessResult(content string, statusCode int) HostHTTPResult {
-	return HostHTTPResult{
+func (adapter *httpAdapter) makeSuccessResult(content string, statusCode int) hostHTTPResult {
+	return hostHTTPResult{
 		host:       adapter.host,
 		status:     SUCCESS,
 		statusCode: statusCode,
@@ -160,22 +223,22 @@ func (adapter *HTTPAdapter) makeSuccessResult(content string, statusCode int) Ho
 	}
 }
 
-// makeExceptionResult is a factory method for HostHTTPResult when an error
+// makeExceptionResult is a factory method for hostHTTPResult when an error
 // during the process of communicating with a REST endpoint. It won't refer to
 // the error received over the wire, but usually some error that occurred in the
 // process of communicating.
-func (adapter *HTTPAdapter) makeExceptionResult(err error) HostHTTPResult {
-	return HostHTTPResult{
+func (adapter *httpAdapter) makeExceptionResult(err error) hostHTTPResult {
+	return hostHTTPResult{
 		host:   adapter.host,
 		status: EXCEPTION,
 		err:    err,
 	}
 }
 
-// makeFailResult is a factory method for HostHTTPResult when an error response
+// makeFailResult is a factory method for hostHTTPResult when an error response
 // is received from a REST endpoint.
-func (adapter *HTTPAdapter) makeFailResult(header http.Header, respBody string, statusCode int) HostHTTPResult {
-	return HostHTTPResult{
+func (adapter *httpAdapter) makeFailResult(header http.Header, respBody string, statusCode int) hostHTTPResult {
+	return hostHTTPResult{
 		host:       adapter.host,
 		status:     FAILURE,
 		statusCode: statusCode,
@@ -187,14 +250,14 @@ func (adapter *HTTPAdapter) makeFailResult(header http.Header, respBody string, 
 // extractErrorFromResponse is called when we get a failed response from a REST
 // call. We will look at the headers and response body to decide what error
 // object to create.
-func (adapter *HTTPAdapter) extractErrorFromResponse(header http.Header, respBody string, statusCode int) error {
+func (adapter *httpAdapter) extractErrorFromResponse(header http.Header, respBody string, statusCode int) error {
 	if header.Get("Content-Type") == rfc7807.ContentType {
 		return rfc7807.GenerateErrorFromResponse(respBody)
 	}
 	return fmt.Errorf("status code %d returned from host %s: %s", statusCode, adapter.host, respBody)
 }
 
-func whetherUsePassword(request *HostHTTPRequest) (bool, error) {
+func whetherUsePassword(request *hostHTTPRequest) (bool, error) {
 	if request.IsNMACommand {
 		return false, nil
 	}
@@ -223,7 +286,7 @@ func whetherUsePassword(request *HostHTTPRequest) (bool, error) {
 // this variable is for unit test, be careful to modify it
 var getCertFilePathsFn = getCertFilePaths
 
-func (adapter *HTTPAdapter) buildCertsFromFile() (tls.Certificate, *x509.CertPool, error) {
+func (adapter *httpAdapter) buildCertsFromFile() (tls.Certificate, *x509.CertPool, error) {
 	certPaths, err := getCertFilePathsFn()
 	if err != nil {
 		return tls.Certificate{}, nil, fmt.Errorf("fail to get paths for certificates, details %w", err)
@@ -244,25 +307,27 @@ func (adapter *HTTPAdapter) buildCertsFromFile() (tls.Certificate, *x509.CertPoo
 	return cert, caCertPool, nil
 }
 
-func (adapter *HTTPAdapter) buildCertsFromMemory(key, cert, caCert string) (tls.Certificate, *x509.CertPool, error) {
+func (adapter *httpAdapter) buildCertsFromMemory(key, cert, caCert string) (tls.Certificate, *x509.CertPool, error) {
 	certificate, err := tls.X509KeyPair([]byte(cert), []byte(key))
 	if err != nil {
 		return certificate, nil, fmt.Errorf("fail to load HTTPS certificates, details %w", err)
 	}
 
 	caCertPool := x509.NewCertPool()
-	ok := caCertPool.AppendCertsFromPEM([]byte(caCert))
-	if !ok {
-		return certificate, nil, fmt.Errorf("fail to load HTTPS CA certificates")
+	if caCert != "" {
+		ok := caCertPool.AppendCertsFromPEM([]byte(caCert))
+		if !ok {
+			return certificate, nil, fmt.Errorf("fail to load HTTPS CA certificates")
+		}
 	}
 
 	return certificate, caCertPool, nil
 }
 
-func (adapter *HTTPAdapter) setupHTTPClient(
-	request *HostHTTPRequest,
+func (adapter *httpAdapter) setupHTTPClient(
+	request *hostHTTPRequest,
 	usePassword bool,
-	_ chan<- HostHTTPResult) (*http.Client, error) {
+	_ chan<- hostHTTPResult) (*http.Client, error) {
 	var client *http.Client
 
 	// set up request timeout
@@ -336,19 +401,23 @@ func getCertFilePaths() (certPaths certificatePaths, err error) {
 		return certPaths, err
 	}
 
+	fixWay := "DBAdmin user can use the --generate-https-certs-only option of install_vertica to regenerate the default certificate bundle"
 	certPaths.certFile = path.Join(certPathBase, username+".pem")
 	if !util.CheckPathExist(certPaths.certFile) {
-		return certPaths, fmt.Errorf("cert file path does not exist")
+		return certPaths, fmt.Errorf("cert file %q does not exist. "+
+			"Please verify that your cert file is in the correct location. %s", certPaths.certFile, fixWay)
 	}
 
 	certPaths.keyFile = path.Join(certPathBase, username+".key")
 	if !util.CheckPathExist(certPaths.keyFile) {
-		return certPaths, fmt.Errorf("key file path does not exist")
+		return certPaths, fmt.Errorf("key file %q does not exist. "+
+			"Please verify that your key file is in the correct location. %s", certPaths.keyFile, fixWay)
 	}
 
 	certPaths.caFile = path.Join(certPathBase, "rootca.pem")
 	if !util.CheckPathExist(certPaths.caFile) {
-		return certPaths, fmt.Errorf("ca file path does not exist")
+		return certPaths, fmt.Errorf("ca file %q does not exist. "+
+			"Please verify that your ca file is in the correct location. %s", certPaths.caFile, fixWay)
 	}
 
 	return certPaths, nil

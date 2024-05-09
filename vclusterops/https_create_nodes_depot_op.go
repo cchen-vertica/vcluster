@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -20,44 +20,43 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-type HTTPSCreateNodesDepotOp struct {
-	OpBase
-	OpHTTPSBase
+type httpsCreateNodesDepotOp struct {
+	opBase
+	opHTTPSBase
 	HostNodeMap vHostNodeMap
 	DepotSize   string
 }
 
 // makeHTTPSCreateNodesDepotOp will make an op that call vertica-http service to create depot for the new nodes
-func makeHTTPSCreateNodesDepotOp(log vlog.Printer, vdb *VCoordinationDatabase, nodes []string,
+func makeHTTPSCreateNodesDepotOp(vdb *VCoordinationDatabase, nodes []string,
 	useHTTPPassword bool, userName string, httpsPassword *string,
-) (HTTPSCreateNodesDepotOp, error) {
-	httpsCreateNodesDepotOp := HTTPSCreateNodesDepotOp{}
-	httpsCreateNodesDepotOp.name = "HTTPSCreateNodesDepotOp"
-	httpsCreateNodesDepotOp.log = log.WithName(httpsCreateNodesDepotOp.name)
-	httpsCreateNodesDepotOp.hosts = nodes
-	httpsCreateNodesDepotOp.useHTTPPassword = useHTTPPassword
-	httpsCreateNodesDepotOp.HostNodeMap = vdb.HostNodeMap
-	httpsCreateNodesDepotOp.DepotSize = vdb.DepotSize
+) (httpsCreateNodesDepotOp, error) {
+	op := httpsCreateNodesDepotOp{}
+	op.name = "HTTPSCreateNodesDepotOp"
+	op.description = "Create depot for new nodes"
+	op.hosts = nodes
+	op.useHTTPPassword = useHTTPPassword
+	op.HostNodeMap = vdb.HostNodeMap
+	op.DepotSize = vdb.DepotSize
 
-	err := util.ValidateUsernameAndPassword(httpsCreateNodesDepotOp.name, useHTTPPassword, userName)
+	err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
 	if err != nil {
-		return httpsCreateNodesDepotOp, err
+		return op, err
 	}
 
-	httpsCreateNodesDepotOp.userName = userName
-	httpsCreateNodesDepotOp.httpsPassword = httpsPassword
-	return httpsCreateNodesDepotOp, nil
+	op.userName = userName
+	op.httpsPassword = httpsPassword
+	return op, nil
 }
 
-func (op *HTTPSCreateNodesDepotOp) setupClusterHTTPRequest(hosts []string) error {
+func (op *httpsCreateNodesDepotOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PostMethod
 		node := op.HostNodeMap[host]
-		httpRequest.BuildHTTPSEndpoint("nodes/" + node.Name + "/depot")
+		httpRequest.buildHTTPSEndpoint("nodes/" + node.Name + "/depot")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -72,13 +71,13 @@ func (op *HTTPSCreateNodesDepotOp) setupClusterHTTPRequest(hosts []string) error
 	return nil
 }
 
-func (op *HTTPSCreateNodesDepotOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+func (op *httpsCreateNodesDepotOp) prepare(execContext *opEngineExecContext) error {
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *HTTPSCreateNodesDepotOp) execute(execContext *OpEngineExecContext) error {
+func (op *httpsCreateNodesDepotOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -86,7 +85,7 @@ func (op *HTTPSCreateNodesDepotOp) execute(execContext *OpEngineExecContext) err
 	return op.processResult(execContext)
 }
 
-func (op *HTTPSCreateNodesDepotOp) processResult(_ *OpEngineExecContext) error {
+func (op *httpsCreateNodesDepotOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 
 	// every host needs to have a successful result, otherwise we fail this op
@@ -126,6 +125,6 @@ func (op *HTTPSCreateNodesDepotOp) processResult(_ *OpEngineExecContext) error {
 	return allErrs
 }
 
-func (op *HTTPSCreateNodesDepotOp) finalize(_ *OpEngineExecContext) error {
+func (op *httpsCreateNodesDepotOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }

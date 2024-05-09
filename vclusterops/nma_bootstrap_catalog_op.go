@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -19,12 +19,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-type NMABootstrapCatalogOp struct {
-	OpBase
+type nmaBootstrapCatalogOp struct {
+	opBase
 	hostRequestBodyMap      map[string]bootstrapCatalogRequestData
 	marshaledRequestBodyMap map[string]string
 }
@@ -48,29 +46,29 @@ type bootstrapCatalogRequestData struct {
 	NumShards          int    `json:"num_shards"`
 	CommunalStorageURL string `json:"communal_storage"`
 	SuperuserName      string `json:"superuser_name"`
-	SensitiveFields
+	GenerateHTTPCerts  bool   `json:"generate_http_certs"`
+	sensitiveFields
 }
 
 func makeNMABootstrapCatalogOp(
-	log vlog.Printer,
 	vdb *VCoordinationDatabase,
 	options *VCreateDatabaseOptions,
-	bootstrapHosts []string) (NMABootstrapCatalogOp, error) {
-	nmaBootstrapCatalogOp := NMABootstrapCatalogOp{}
-	nmaBootstrapCatalogOp.name = "NMABootstrapCatalogOp"
-	nmaBootstrapCatalogOp.log = log.WithName(nmaBootstrapCatalogOp.name)
+	bootstrapHosts []string) (nmaBootstrapCatalogOp, error) {
+	op := nmaBootstrapCatalogOp{}
+	op.name = "NMABootstrapCatalogOp"
+	op.description = "Bootstrap catalog"
 	// usually, only one node need bootstrap catalog
-	nmaBootstrapCatalogOp.hosts = bootstrapHosts
+	op.hosts = bootstrapHosts
 
-	err := nmaBootstrapCatalogOp.setupRequestBody(vdb, options)
+	err := op.setupRequestBody(vdb, options)
 	if err != nil {
-		return nmaBootstrapCatalogOp, err
+		return op, err
 	}
 
-	return nmaBootstrapCatalogOp, nil
+	return op, nil
 }
 
-func (op *NMABootstrapCatalogOp) setupRequestBody(vdb *VCoordinationDatabase, options *VCreateDatabaseOptions) error {
+func (op *nmaBootstrapCatalogOp) setupRequestBody(vdb *VCoordinationDatabase, options *VCreateDatabaseOptions) error {
 	op.hostRequestBodyMap = make(map[string]bootstrapCatalogRequestData)
 
 	for _, host := range op.hosts {
@@ -91,22 +89,25 @@ func (op *NMABootstrapCatalogOp) setupRequestBody(vdb *VCoordinationDatabase, op
 		bootstrapData.Parameters = options.ConfigurationParameters
 
 		// need to read network_profile info in execContext
-		// see execContext in NMABootstrapCatalogOp:prepare()
+		// see execContext in nmaBootstrapCatalogOp:prepare()
 		bootstrapData.ControlAddr = vnode.Address
 
 		bootstrapData.LicenseKey = vdb.LicensePathOnNode
 		// large cluster mode temporariliy disabled
-		bootstrapData.LargeCluster = *options.LargeCluster
-		if *options.P2p {
+		bootstrapData.LargeCluster = options.LargeCluster
+		if options.P2p {
 			bootstrapData.NetworkingMode = "pt2pt"
 		} else {
 			bootstrapData.NetworkingMode = "broadcast"
 		}
-		bootstrapData.SpreadLogging = *options.SpreadLogging
-		bootstrapData.SpreadLoggingLevel = *options.SpreadLoggingLevel
-		bootstrapData.Ipv6 = options.Ipv6.ToBool()
-		bootstrapData.SuperuserName = *options.UserName
+		bootstrapData.SpreadLogging = options.SpreadLogging
+		bootstrapData.SpreadLoggingLevel = options.SpreadLoggingLevel
+		bootstrapData.Ipv6 = options.IPv6
+		bootstrapData.SuperuserName = options.UserName
 		bootstrapData.DBPassword = *options.Password
+
+		// Flag to generate certs and tls configuration
+		bootstrapData.GenerateHTTPCerts = options.GenerateHTTPCerts
 
 		// Eon params
 		bootstrapData.NumShards = vdb.NumShards
@@ -120,7 +121,7 @@ func (op *NMABootstrapCatalogOp) setupRequestBody(vdb *VCoordinationDatabase, op
 	return nil
 }
 
-func (op *NMABootstrapCatalogOp) updateRequestBody(execContext *OpEngineExecContext) error {
+func (op *nmaBootstrapCatalogOp) updateRequestBody(execContext *opEngineExecContext) error {
 	op.marshaledRequestBodyMap = make(map[string]string)
 	maskedRequestBodyMap := make(map[string]bootstrapCatalogRequestData)
 
@@ -132,7 +133,7 @@ func (op *NMABootstrapCatalogOp) updateRequestBody(execContext *OpEngineExecCont
 
 		dataBytes, err := json.Marshal(op.hostRequestBodyMap[host])
 		if err != nil {
-			op.log.Error(err, `[%s] fail to marshal request data to JSON string`, op.name)
+			op.logger.Error(err, `[%s] fail to marshal request data to JSON string`, op.name)
 			return err
 		}
 		op.marshaledRequestBodyMap[host] = string(dataBytes)
@@ -142,17 +143,17 @@ func (op *NMABootstrapCatalogOp) updateRequestBody(execContext *OpEngineExecCont
 		maskedData.maskSensitiveInfo()
 		maskedRequestBodyMap[host] = maskedData
 	}
-	op.log.Info("request data", "op name", op.name, "bodyMap", maskedRequestBodyMap)
+	op.logger.Info("request data", "op name", op.name, "bodyMap", maskedRequestBodyMap)
 
 	return nil
 }
 
-func (op *NMABootstrapCatalogOp) setupClusterHTTPRequest(hosts []string) error {
+func (op *nmaBootstrapCatalogOp) setupClusterHTTPRequest(hosts []string) error {
 	// usually, only one node need bootstrap catalog
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildNMAEndpoint("catalog/bootstrap")
+		httpRequest.buildNMAEndpoint("catalog/bootstrap")
 		httpRequest.RequestData = op.marshaledRequestBodyMap[host]
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
 	}
@@ -160,18 +161,18 @@ func (op *NMABootstrapCatalogOp) setupClusterHTTPRequest(hosts []string) error {
 	return nil
 }
 
-func (op *NMABootstrapCatalogOp) prepare(execContext *OpEngineExecContext) error {
+func (op *nmaBootstrapCatalogOp) prepare(execContext *opEngineExecContext) error {
 	err := op.updateRequestBody(execContext)
 	if err != nil {
 		return err
 	}
 
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *NMABootstrapCatalogOp) execute(execContext *OpEngineExecContext) error {
+func (op *nmaBootstrapCatalogOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -179,11 +180,11 @@ func (op *NMABootstrapCatalogOp) execute(execContext *OpEngineExecContext) error
 	return op.processResult(execContext)
 }
 
-func (op *NMABootstrapCatalogOp) finalize(_ *OpEngineExecContext) error {
+func (op *nmaBootstrapCatalogOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }
 
-func (op *NMABootstrapCatalogOp) processResult(_ *OpEngineExecContext) error {
+func (op *nmaBootstrapCatalogOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {

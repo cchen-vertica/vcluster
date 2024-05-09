@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -18,42 +18,50 @@ package vclusterops
 import (
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/vertica/vcluster/vclusterops/util"
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-type HTTPSInstallPackagesOp struct {
-	OpBase
-	OpHTTPSBase
+type httpsInstallPackagesOp struct {
+	opBase
+	opHTTPSBase
+	verbose        bool // Include verbose output about package install status
+	forceReinstall bool
+	status         InstallPackageStatus // Filled in once the op completes
 }
 
-func makeHTTPSInstallPackagesOp(log vlog.Printer, hosts []string, useHTTPPassword bool,
-	userName string, httpsPassword *string,
-) (HTTPSInstallPackagesOp, error) {
-	installPackagesOp := HTTPSInstallPackagesOp{}
-	installPackagesOp.name = "HTTPSInstallPackagesOp"
-	installPackagesOp.log = log.WithName(installPackagesOp.name)
-	installPackagesOp.hosts = hosts
+func makeHTTPSInstallPackagesOp(hosts []string, useHTTPPassword bool,
+	userName string, httpsPassword *string, forceReinstall bool, verbose bool,
+) (httpsInstallPackagesOp, error) {
+	op := httpsInstallPackagesOp{}
+	op.name = "HTTPSInstallPackagesOp"
+	op.description = "Install packages"
+	op.hosts = hosts
+	op.verbose = verbose
+	op.forceReinstall = forceReinstall
 
-	err := util.ValidateUsernameAndPassword(installPackagesOp.name, useHTTPPassword, userName)
+	err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
 	if err != nil {
-		return installPackagesOp, err
+		return op, err
 	}
-	installPackagesOp.useHTTPPassword = useHTTPPassword
-	installPackagesOp.userName = userName
-	installPackagesOp.httpsPassword = httpsPassword
-	return installPackagesOp, nil
+	op.useHTTPPassword = useHTTPPassword
+	op.userName = userName
+	op.httpsPassword = httpsPassword
+	return op, nil
 }
 
-func (op *HTTPSInstallPackagesOp) setupClusterHTTPRequest(hosts []string) error {
+func (op *httpsInstallPackagesOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildHTTPSEndpoint("packages")
+		httpRequest.buildHTTPSEndpoint("packages")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
+		}
+		httpRequest.QueryParams = map[string]string{
+			"force-install": strconv.FormatBool(op.forceReinstall),
 		}
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
 	}
@@ -61,13 +69,21 @@ func (op *HTTPSInstallPackagesOp) setupClusterHTTPRequest(hosts []string) error 
 	return nil
 }
 
-func (op *HTTPSInstallPackagesOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+func (op *httpsInstallPackagesOp) prepare(execContext *opEngineExecContext) error {
+	// If no hosts passed in, we will find the hosts from execute-context
+	if len(op.hosts) == 0 {
+		if len(execContext.upHosts) == 0 {
+			return fmt.Errorf(`[%s] Cannot find any up hosts in OpEngineExecContext`, op.name)
+		}
+		// use first up host to execute https post request
+		op.hosts = []string{execContext.upHosts[0]}
+	}
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *HTTPSInstallPackagesOp) execute(execContext *OpEngineExecContext) error {
+func (op *httpsInstallPackagesOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -75,12 +91,13 @@ func (op *HTTPSInstallPackagesOp) execute(execContext *OpEngineExecContext) erro
 	return op.processResult(execContext)
 }
 
-func (op *HTTPSInstallPackagesOp) finalize(_ *OpEngineExecContext) error {
+func (op *httpsInstallPackagesOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }
 
 /*
-	HTTPSInstallPackagesResponse example:
+The response from the package endpoint, which are encoded in the next two
+structs, will look like this:
 
 {'packages': [
 
@@ -94,11 +111,24 @@ func (op *HTTPSInstallPackagesOp) finalize(_ *OpEngineExecContext) error {
 	             },
 	           ...
 	           ]
-	}
+}
 */
-type HTTPSInstallPackagesResponse map[string][]map[string]string
 
-func (op *HTTPSInstallPackagesOp) processResult(_ *OpEngineExecContext) error {
+// InstallPackageStatus provides status for each package install attempted.
+type InstallPackageStatus struct {
+	Packages []PackageStatus `json:"packages"`
+}
+
+// PackageStatus has install status for a single package.
+type PackageStatus struct {
+	// Name of the package this status is for
+	PackageName string `json:"package_name"`
+	// One word outcome of the install status:
+	// Skipped, Success or Failure
+	InstallStatus string `json:"install_status"`
+}
+
+func (op *httpsInstallPackagesOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
@@ -109,21 +139,25 @@ func (op *HTTPSInstallPackagesOp) processResult(_ *OpEngineExecContext) error {
 			continue
 		}
 
-		var responseObj HTTPSInstallPackagesResponse
-		err := op.parseAndCheckResponse(host, result.content, &responseObj)
-
+		err := op.parseAndCheckResponse(host, result.content, &op.status)
 		if err != nil {
 			allErrs = errors.Join(allErrs, err)
 			continue
 		}
 
-		installedPackages, ok := responseObj["packages"]
-		if !ok {
-			err = fmt.Errorf(`[%s] response does not contain field "packages"`, op.name)
+		if len(op.status.Packages) == 0 {
+			err = fmt.Errorf(`[%s] response does not have status for any packages`, op.name)
 			allErrs = errors.Join(allErrs, err)
 		}
 
-		op.log.PrintInfo("[%s] installed packages: %v", op.name, installedPackages)
+		// Only print out status if verbose output was requested. Otherwise,
+		// just write status to the log.
+		msg := fmt.Sprintf("[%s] installation status of packages: %v", op.name, op.status.Packages)
+		if op.verbose {
+			op.logger.PrintInfo(msg)
+		} else {
+			op.logger.V(1).Info(msg)
+		}
 	}
 	return allErrs
 }

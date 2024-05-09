@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -16,8 +16,9 @@
 package commands
 
 import (
-	"flag"
+	"fmt"
 
+	"github.com/spf13/cobra"
 	"github.com/vertica/vcluster/vclusterops"
 	"github.com/vertica/vcluster/vclusterops/util"
 	"github.com/vertica/vcluster/vclusterops/vlog"
@@ -29,106 +30,130 @@ import (
  */
 type CmdRemoveNode struct {
 	removeNodeOptions *vclusterops.VRemoveNodeOptions
-	// Comma-separated list of hosts to add
-	hostToRemoveListStr *string
 
 	CmdBase
 }
 
-func makeCmdRemoveNode() *CmdRemoveNode {
+func makeCmdRemoveNode() *cobra.Command {
 	// CmdRemoveNode
 	newCmd := &CmdRemoveNode{}
+	opt := vclusterops.VRemoveNodeOptionsFactory()
+	newCmd.removeNodeOptions = &opt
 
-	// parser, used to parse command-line flags
-	newCmd.parser = flag.NewFlagSet("db_remove_node", flag.ExitOnError)
-	removeNodeOptions := vclusterops.VRemoveNodeOptionsFactory()
+	cmd := makeBasicCobraCmd(
+		newCmd,
+		removeNodeSubCmd,
+		"Remove host(s) from an existing database",
+		`This subcommand removes one or more nodes from an existing database.
 
-	// required flags
-	removeNodeOptions.DBName = newCmd.parser.String("db-name", "", "The name of the database to remove node(s) from")
-	newCmd.hostToRemoveListStr = newCmd.parser.String("remove", "", "Comma-separated list of hosts to remove from the database")
+You must provide the --remove option followed by one or more hosts to
+remove as a comma-separated list.
 
-	// optional flags
-	removeNodeOptions.HonorUserInput = newCmd.parser.Bool("honor-user-input", false,
-		util.GetOptionalFlagMsg("Forcefully use the user's input instead of reading the options from "+vclusterops.ConfigFileName))
-	removeNodeOptions.Password = newCmd.parser.String("password", "", util.GetOptionalFlagMsg("Database password in single quotes"))
-	newCmd.hostListStr = newCmd.parser.String("hosts", "", util.GetOptionalFlagMsg("Comma-separated hosts that will initially be used"+
-		" to get cluster info from the db. Use it when you do not trust "+vclusterops.ConfigFileName))
-	removeNodeOptions.ConfigDirectory = newCmd.parser.String("config-directory", "",
-		util.GetOptionalFlagMsg("Directory where "+vclusterops.ConfigFileName+" is located"))
-	removeNodeOptions.ForceDelete = newCmd.parser.Bool("force-delete", true, util.GetOptionalFlagMsg("Whether force delete directories"+
-		" if they are not empty"))
-	removeNodeOptions.DataPrefix = newCmd.parser.String("data-path", "", util.GetOptionalFlagMsg("Path of data directory"))
-	newCmd.ipv6 = newCmd.parser.Bool("ipv6", false, util.GetOptionalFlagMsg("Whether the hosts use IPv6 addresses"))
+You cannot remove nodes from a sandboxed subcluster in an Eon Mode database.
 
-	// Eon flags
-	// VER-88096: get all nodes information from the database and remove this option
-	removeNodeOptions.DepotPrefix = newCmd.parser.String("depot-path", "", util.GetEonFlagMsg("Path to depot directory"))
+Examples:
+  # Remove multiple nodes from the existing database with config file
+  vcluster db_remove_node --db-name test_db \
+    --remove 10.20.30.40,10.20.30.42 \
+    --config /opt/vertica/config/vertica_cluster.yaml
 
-	newCmd.removeNodeOptions = &removeNodeOptions
-	return newCmd
+  # Remove a single node from the existing database with user input
+  vcluster db_remove_node --db-name test_db --remove 10.20.30.42 \
+    --hosts 10.20.30.40 --data-path /data
+`,
+		[]string{dbNameFlag, configFlag, hostsFlag, catalogPathFlag, dataPathFlag, depotPathFlag, passwordFlag},
+	)
+
+	// local flags
+	newCmd.setLocalFlags(cmd)
+
+	// require hosts to remove
+	markFlagsRequired(cmd, []string{"remove"})
+
+	return cmd
 }
 
-func (c *CmdRemoveNode) CommandType() string {
-	return "db_remove_node"
+// setLocalFlags will set the local flags the command has
+func (c *CmdRemoveNode) setLocalFlags(cmd *cobra.Command) {
+	cmd.Flags().StringSliceVar(
+		&c.removeNodeOptions.HostsToRemove,
+		"remove",
+		[]string{},
+		"Comma-separated list of host(s) to remove from the database",
+	)
+	cmd.Flags().BoolVar(
+		&c.removeNodeOptions.ForceDelete,
+		"force-delete",
+		true,
+		"Whether to force clean-up of existing directories if they are not empty",
+	)
 }
 
-func (c *CmdRemoveNode) Parse(inputArgv []string, log vlog.Printer) error {
+func (c *CmdRemoveNode) Parse(inputArgv []string, logger vlog.Printer) error {
 	c.argv = inputArgv
-	err := c.ValidateParseArgv(c.CommandType(), log)
-	if err != nil {
-		return err
-	}
+	logger.LogMaskedArgParse(c.argv)
 
 	// for some options, we do not want to use their default values,
 	// if they are not provided in cli,
 	// reset the value of those options to nil
-	if !util.IsOptionSet(c.parser, "config-directory") {
-		c.removeNodeOptions.ConfigDirectory = nil
-	}
-
-	if !util.IsOptionSet(c.parser, "password") {
-		c.removeNodeOptions.Password = nil
-	}
-	return c.validateParse(log)
+	c.ResetUserInputOptions(&c.removeNodeOptions.DatabaseOptions)
+	return c.validateParse(logger)
 }
 
-func (c *CmdRemoveNode) validateParse(log vlog.Printer) error {
-	log.Info("Called validateParse()")
+func (c *CmdRemoveNode) validateParse(logger vlog.Printer) error {
+	logger.Info("Called validateParse()")
 
-	err := c.removeNodeOptions.ParseHostToRemoveList(*c.hostToRemoveListStr)
+	err := c.parseHostToRemoveList()
 	if err != nil {
 		return err
 	}
-	return c.ValidateParseBaseOptions(&c.removeNodeOptions.DatabaseOptions)
+
+	err = c.getCertFilesFromCertPaths(&c.removeNodeOptions.DatabaseOptions)
+	if err != nil {
+		return err
+	}
+
+	err = c.ValidateParseBaseOptions(&c.removeNodeOptions.DatabaseOptions)
+	if err != nil {
+		return err
+	}
+	return c.setDBPassword(&c.removeNodeOptions.DatabaseOptions)
 }
 
-func (c *CmdRemoveNode) Analyze(_ vlog.Printer) error {
+// parseHostToRemoveList trims and lowercases the hosts in --remove
+func (c *CmdRemoveNode) parseHostToRemoveList() error {
+	if len(c.removeNodeOptions.HostsToRemove) > 0 {
+		err := util.ParseHostList(&c.removeNodeOptions.HostsToRemove)
+		if err != nil {
+			// the err from util.ParseHostList will be "must specify a host or host list"
+			// we overwrite the error here to provide more details
+			return fmt.Errorf("must specify at least one host to remove")
+		}
+	}
 	return nil
 }
 
-func (c *CmdRemoveNode) Run(vcc vclusterops.VClusterCommands) error {
-	vcc.Log.V(1).Info("Called method Run()")
+func (c *CmdRemoveNode) Run(vcc vclusterops.ClusterCommands) error {
+	vcc.LogInfo("Called method Run()")
 
 	options := c.removeNodeOptions
-
-	// get config from vertica_cluster.yaml
-	config, err := c.removeNodeOptions.GetDBConfig(vcc)
-	if err != nil {
-		return err
-	}
-	options.Config = config
 
 	vdb, err := vcc.VRemoveNode(options)
 	if err != nil {
 		return err
 	}
-	vcc.Log.PrintInfo("Successfully removed nodes %s from database %s", *c.hostToRemoveListStr, *options.DBName)
 
-	// write cluster information to the YAML config file.
-	err = vdb.WriteClusterConfig(options.ConfigDirectory, vcc.Log)
+	// write db info to vcluster config file
+	err = writeConfig(&vdb)
 	if err != nil {
-		vcc.Log.PrintWarning("failed to write config file, details: %s", err)
+		vcc.PrintWarning("fail to write config file, details: %s", err)
 	}
-	vcc.Log.PrintInfo("Successfully updated config file")
+	vcc.PrintInfo("Successfully removed nodes %v from database %s", c.removeNodeOptions.HostsToRemove, options.DBName)
+
 	return nil
+}
+
+// SetDatabaseOptions will assign a vclusterops.DatabaseOptions instance to the one in CmdRemoveNode
+func (c *CmdRemoveNode) SetDatabaseOptions(opt *vclusterops.DatabaseOptions) {
+	c.removeNodeOptions.DatabaseOptions = *opt
 }

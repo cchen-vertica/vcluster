@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -23,45 +23,45 @@ import (
 
 func TestGetDescriptionFilePath(t *testing.T) {
 	opt := VReviveDBOptionsFactory()
-	*opt.DBName = "test_eon_db"
+	opt.DBName = "test_eon_db"
 
 	// local communal storage:
 	targetPath := "/communal/metadata/test_eon_db/cluster_config.json"
 	// case 1: normal communal storage path
-	*opt.CommunalStorageLocation = "/communal"
-	path := opt.getDescriptionFilePath()
+	opt.CommunalStorageLocation = "/communal"
+	path := opt.getCurrConfigFilePath()
 	assert.Equal(t, targetPath, path)
 
 	// case 2: double-slash communal storage path
-	*opt.CommunalStorageLocation = "//communal"
-	path = opt.getDescriptionFilePath()
+	opt.CommunalStorageLocation = "//communal"
+	path = opt.getCurrConfigFilePath()
 	assert.Equal(t, targetPath, path)
 
 	// case 3: double-slash communal storage path followed by a slash
-	*opt.CommunalStorageLocation = "//communal/"
-	path = opt.getDescriptionFilePath()
+	opt.CommunalStorageLocation = "//communal/"
+	path = opt.getCurrConfigFilePath()
 	assert.Equal(t, targetPath, path)
 
 	// case 4: double-slash communal storage path followed by a double-slash
-	*opt.CommunalStorageLocation = "//communal//"
-	path = opt.getDescriptionFilePath()
+	opt.CommunalStorageLocation = "//communal//"
+	path = opt.getCurrConfigFilePath()
 	assert.Equal(t, targetPath, path)
 
 	// remote communal storage:
 	targetS3Path := "s3://vertica-fleeting/k8s/revive_eon_5/metadata/test_eon_db/cluster_config.json"
 	targetGCPPath := "gs://vertica-fleeting/k8s/revive_eon_5/metadata/test_eon_db/cluster_config.json"
 	// case 1 - normal s3 communal storage:
-	*opt.CommunalStorageLocation = "s3://vertica-fleeting/k8s/revive_eon_5"
-	path = opt.getDescriptionFilePath()
+	opt.CommunalStorageLocation = "s3://vertica-fleeting/k8s/revive_eon_5"
+	path = opt.getCurrConfigFilePath()
 	assert.Equal(t, targetS3Path, path)
 
 	// case 2: double-slash s3 communal storage path
-	*opt.CommunalStorageLocation = "s3://vertica-fleeting//k8s//revive_eon_5"
-	path = opt.getDescriptionFilePath()
+	opt.CommunalStorageLocation = "s3://vertica-fleeting//k8s//revive_eon_5"
+	path = opt.getCurrConfigFilePath()
 	assert.Equal(t, targetS3Path, path)
 
 	// case 3: other cloud communal storage paths like GCP
-	*opt.CommunalStorageLocation = "gs://vertica-fleeting/k8s/revive_eon_5"
-	path = opt.getDescriptionFilePath()
+	opt.CommunalStorageLocation = "gs://vertica-fleeting/k8s/revive_eon_5"
+	path = opt.getCurrConfigFilePath()
 	assert.Equal(t, targetGCPPath, path)
 }

@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -20,40 +20,39 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 const RebalanceClusterSuccMsg = "REBALANCED"
 const RebalanceShardsSuccMsg = "REBALANCED SHARDS"
 
-type HTTPSRebalanceClusterOp struct {
-	OpBase
-	OpHTTPSBase
+type httpsRebalanceClusterOp struct {
+	opBase
+	opHTTPSBase
 }
 
 // makeHTTPSRebalanceClusterOp will make an op that call vertica-http service to rebalance the cluster
-func makeHTTPSRebalanceClusterOp(log vlog.Printer, initiatorHost []string, useHTTPPassword bool, userName string,
-	httpsPassword *string) (HTTPSRebalanceClusterOp, error) {
-	httpsRBCOp := HTTPSRebalanceClusterOp{}
-	httpsRBCOp.name = "HTTPSRebalanceClusterOp"
-	httpsRBCOp.log = log.WithName(httpsRBCOp.name)
-	httpsRBCOp.hosts = initiatorHost
+func makeHTTPSRebalanceClusterOp(initiatorHost []string, useHTTPPassword bool, userName string,
+	httpsPassword *string) (httpsRebalanceClusterOp, error) {
+	op := httpsRebalanceClusterOp{}
+	op.name = "HTTPSRebalanceClusterOp"
+	op.description = "Rebalance cluster"
+	op.hosts = initiatorHost
 
-	httpsRBCOp.useHTTPPassword = useHTTPPassword
-	err := util.ValidateUsernameAndPassword(httpsRBCOp.name, useHTTPPassword, userName)
+	op.useHTTPPassword = useHTTPPassword
+	err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
 	if err != nil {
-		return httpsRBCOp, err
+		return op, err
 	}
-	httpsRBCOp.userName = userName
-	httpsRBCOp.httpsPassword = httpsPassword
-	return httpsRBCOp, nil
+	op.userName = userName
+	op.httpsPassword = httpsPassword
+	return op, nil
 }
 
-func (op *HTTPSRebalanceClusterOp) setupClusterHTTPRequest(hosts []string) error {
+func (op *httpsRebalanceClusterOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildHTTPSEndpoint("cluster/rebalance")
+		httpRequest.buildHTTPSEndpoint("cluster/rebalance")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -63,12 +62,12 @@ func (op *HTTPSRebalanceClusterOp) setupClusterHTTPRequest(hosts []string) error
 	return nil
 }
 
-func (op *HTTPSRebalanceClusterOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+func (op *httpsRebalanceClusterOp) prepare(execContext *opEngineExecContext) error {
+	execContext.dispatcher.setup(op.hosts)
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *HTTPSRebalanceClusterOp) execute(execContext *OpEngineExecContext) error {
+func (op *httpsRebalanceClusterOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -76,17 +75,17 @@ func (op *HTTPSRebalanceClusterOp) execute(execContext *OpEngineExecContext) err
 	return op.processResult(execContext)
 }
 
-func (op *HTTPSRebalanceClusterOp) processResult(_ *OpEngineExecContext) error {
+func (op *httpsRebalanceClusterOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
-		if result.IsUnauthorizedRequest() {
+		if result.isUnauthorizedRequest() {
 			// skip checking response from other nodes because we will get the same error there
 			return result.err
 		}
-		if !result.IsSuccess() {
+		if !result.isSuccess() {
 			allErrs = errors.Join(allErrs, result.err)
 			// try processing other hosts' responses when the current host has some server errors
 			continue
@@ -124,6 +123,6 @@ func (op *HTTPSRebalanceClusterOp) processResult(_ *OpEngineExecContext) error {
 	return allErrs
 }
 
-func (op *HTTPSRebalanceClusterOp) finalize(_ *OpEngineExecContext) error {
+func (op *httpsRebalanceClusterOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }

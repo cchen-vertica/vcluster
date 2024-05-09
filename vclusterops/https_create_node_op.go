@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -20,43 +20,42 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-type HTTPSCreateNodeOp struct {
-	OpBase
-	OpHTTPSBase
+type httpsCreateNodeOp struct {
+	opBase
+	opHTTPSBase
 	RequestParams map[string]string
 }
 
-func makeHTTPSCreateNodeOp(log vlog.Printer, newNodeHosts []string, bootstrapHost []string,
+func makeHTTPSCreateNodeOp(newNodeHosts []string, bootstrapHost []string,
 	useHTTPPassword bool, userName string, httpsPassword *string,
-	vdb *VCoordinationDatabase, scName string) (HTTPSCreateNodeOp, error) {
-	createNodeOp := HTTPSCreateNodeOp{}
-	createNodeOp.name = "HTTPSCreateNodeOp"
-	createNodeOp.log = log.WithName(createNodeOp.name)
-	createNodeOp.hosts = bootstrapHost
-	createNodeOp.RequestParams = make(map[string]string)
+	vdb *VCoordinationDatabase, scName string) (httpsCreateNodeOp, error) {
+	op := httpsCreateNodeOp{}
+	op.name = "HTTPSCreateNodeOp"
+	op.description = "Create node in catalog"
+	op.hosts = bootstrapHost
+	op.RequestParams = make(map[string]string)
 	// HTTPS create node endpoint requires passing everything before node name
-	createNodeOp.RequestParams["catalog-prefix"] = vdb.CatalogPrefix + "/" + vdb.Name
-	createNodeOp.RequestParams["data-prefix"] = vdb.DataPrefix + "/" + vdb.Name
-	createNodeOp.RequestParams["hosts"] = util.ArrayToString(newNodeHosts, ",")
+	op.RequestParams["catalog-prefix"] = vdb.CatalogPrefix + "/" + vdb.Name
+	op.RequestParams["data-prefix"] = vdb.DataPrefix + "/" + vdb.Name
+	op.RequestParams["hosts"] = util.ArrayToString(newNodeHosts, ",")
 	if scName != "" {
-		createNodeOp.RequestParams["subcluster"] = scName
+		op.RequestParams["subcluster"] = scName
 	}
-	err := createNodeOp.validateAndSetUsernameAndPassword(createNodeOp.name,
+	err := op.validateAndSetUsernameAndPassword(op.name,
 		useHTTPPassword, userName, httpsPassword)
 
-	return createNodeOp, err
+	return op, err
 }
 
-func (op *HTTPSCreateNodeOp) setupClusterHTTPRequest(hosts []string) error {
+func (op *httpsCreateNodeOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PostMethod
 		// note that this will be updated in Prepare()
 		// because the endpoint only accept parameters in query
-		httpRequest.BuildHTTPSEndpoint("nodes")
+		httpRequest.buildHTTPSEndpoint("nodes")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -68,7 +67,7 @@ func (op *HTTPSCreateNodeOp) setupClusterHTTPRequest(hosts []string) error {
 	return nil
 }
 
-func (op *HTTPSCreateNodeOp) updateQueryParams(execContext *OpEngineExecContext) error {
+func (op *httpsCreateNodeOp) updateQueryParams(execContext *opEngineExecContext) error {
 	for _, host := range op.hosts {
 		profile, ok := execContext.networkProfiles[host]
 		if !ok {
@@ -79,18 +78,18 @@ func (op *HTTPSCreateNodeOp) updateQueryParams(execContext *OpEngineExecContext)
 	return nil
 }
 
-func (op *HTTPSCreateNodeOp) prepare(execContext *OpEngineExecContext) error {
+func (op *httpsCreateNodeOp) prepare(execContext *opEngineExecContext) error {
 	err := op.updateQueryParams(execContext)
 	if err != nil {
 		return err
 	}
 
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *HTTPSCreateNodeOp) execute(execContext *OpEngineExecContext) error {
+func (op *httpsCreateNodeOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -98,13 +97,13 @@ func (op *HTTPSCreateNodeOp) execute(execContext *OpEngineExecContext) error {
 	return op.processResult(execContext)
 }
 
-func (op *HTTPSCreateNodeOp) finalize(_ *OpEngineExecContext) error {
+func (op *httpsCreateNodeOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }
 
-type HTTPCreateNodeResponse map[string][]map[string]string
+type httpsCreateNodeResponse map[string][]map[string]string
 
-func (op *HTTPSCreateNodeOp) processResult(_ *OpEngineExecContext) error {
+func (op *httpsCreateNodeOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
@@ -114,7 +113,7 @@ func (op *HTTPSCreateNodeOp) processResult(_ *OpEngineExecContext) error {
 			// The response object will be a dictionary, an example:
 			// {'created_nodes': [{'name': 'v_running_db_node0002', 'catalog_path': '/data/v_running_db_node0002_catalog'},
 			//                    {'name': 'v_running_db_node0003', 'catalog_path': '/data/v_running_db_node0003_catalog'}]}
-			var responseObj HTTPCreateNodeResponse
+			var responseObj httpsCreateNodeResponse
 			err := op.parseAndCheckResponse(host, result.content, &responseObj)
 
 			if err != nil {

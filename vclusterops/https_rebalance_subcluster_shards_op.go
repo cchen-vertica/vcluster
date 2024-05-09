@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -20,43 +20,42 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 const HTTPSSuccMsg = "REBALANCED SHARDS"
 
-type HTTPSRebalanceSubclusterShardsOp struct {
-	OpBase
-	OpHTTPSBase
+type httpsRebalanceSubclusterShardsOp struct {
+	opBase
+	opHTTPSBase
 	scName string
 }
 
 // makeHTTPSRebalanceSubclusterShardsOp creates an op that calls vertica-http service to rebalance shards of a subcluster
-func makeHTTPSRebalanceSubclusterShardsOp(log vlog.Printer, bootstrapHost []string, useHTTPPassword bool, userName string,
-	httpsPassword *string, scName string) (HTTPSRebalanceSubclusterShardsOp, error) {
-	httpsRBSCShardsOp := HTTPSRebalanceSubclusterShardsOp{}
-	httpsRBSCShardsOp.name = "HTTPSRebalanceSubclusterShardsOp"
-	httpsRBSCShardsOp.log = log.WithName(httpsRBSCShardsOp.name)
-	httpsRBSCShardsOp.hosts = bootstrapHost
-	httpsRBSCShardsOp.scName = scName
+func makeHTTPSRebalanceSubclusterShardsOp(bootstrapHost []string, useHTTPPassword bool, userName string,
+	httpsPassword *string, scName string) (httpsRebalanceSubclusterShardsOp, error) {
+	op := httpsRebalanceSubclusterShardsOp{}
+	op.name = "HTTPSRebalanceSubclusterShardsOp"
+	op.description = "Initiate rebalance of subcluster shards"
+	op.hosts = bootstrapHost
+	op.scName = scName
 
-	httpsRBSCShardsOp.useHTTPPassword = useHTTPPassword
+	op.useHTTPPassword = useHTTPPassword
 	if useHTTPPassword {
-		err := util.ValidateUsernameAndPassword(httpsRBSCShardsOp.name, useHTTPPassword, userName)
+		err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
 		if err != nil {
-			return httpsRBSCShardsOp, err
+			return op, err
 		}
-		httpsRBSCShardsOp.userName = userName
-		httpsRBSCShardsOp.httpsPassword = httpsPassword
+		op.userName = userName
+		op.httpsPassword = httpsPassword
 	}
-	return httpsRBSCShardsOp, nil
+	return op, nil
 }
 
-func (op *HTTPSRebalanceSubclusterShardsOp) setupClusterHTTPRequest(hosts []string) error {
+func (op *httpsRebalanceSubclusterShardsOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildHTTPSEndpoint("subclusters/" + op.scName + "/rebalance")
+		httpRequest.buildHTTPSEndpoint("subclusters/" + op.scName + "/rebalance")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -67,7 +66,7 @@ func (op *HTTPSRebalanceSubclusterShardsOp) setupClusterHTTPRequest(hosts []stri
 	return nil
 }
 
-func (op *HTTPSRebalanceSubclusterShardsOp) prepare(execContext *OpEngineExecContext) error {
+func (op *httpsRebalanceSubclusterShardsOp) prepare(execContext *opEngineExecContext) error {
 	// rebalance shards on the default subcluster if scName isn't provided
 	if op.scName == "" {
 		if execContext.defaultSCName == "" {
@@ -76,12 +75,12 @@ func (op *HTTPSRebalanceSubclusterShardsOp) prepare(execContext *OpEngineExecCon
 		op.scName = execContext.defaultSCName
 	}
 
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *HTTPSRebalanceSubclusterShardsOp) execute(execContext *OpEngineExecContext) error {
+func (op *httpsRebalanceSubclusterShardsOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -89,13 +88,13 @@ func (op *HTTPSRebalanceSubclusterShardsOp) execute(execContext *OpEngineExecCon
 	return op.processResult(execContext)
 }
 
-func (op *HTTPSRebalanceSubclusterShardsOp) processResult(_ *OpEngineExecContext) error {
+func (op *httpsRebalanceSubclusterShardsOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
-		if result.IsUnauthorizedRequest() {
+		if result.isUnauthorizedRequest() {
 			// skip checking response from other nodes because we will get the same error there
 			return result.err
 		}
@@ -131,6 +130,6 @@ func (op *HTTPSRebalanceSubclusterShardsOp) processResult(_ *OpEngineExecContext
 	return allErrs
 }
 
-func (op *HTTPSRebalanceSubclusterShardsOp) finalize(_ *OpEngineExecContext) error {
+func (op *httpsRebalanceSubclusterShardsOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }

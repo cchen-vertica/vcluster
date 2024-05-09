@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -19,32 +19,45 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
 type nmaStartNodeOp struct {
-	OpBase
+	opBase
+	startupConf        string
 	hostRequestBodyMap map[string]string
 	vdb                *VCoordinationDatabase
+	sandbox            bool
 }
 
-func makeNMAStartNodeOp(log vlog.Printer,
-	hosts []string) nmaStartNodeOp {
-	startNodeOp := nmaStartNodeOp{}
-	startNodeOp.name = "NMAStartNodeOp"
-	startNodeOp.log = log.WithName(startNodeOp.name)
-	startNodeOp.hosts = hosts
+type startNodeRequestData struct {
+	StartCommand []string `json:"start_command"`
+	StartupConf  string   `json:"startup_conf"`
+}
+
+func makeNMAStartNodeOp(
+	hosts []string, startupConf string) nmaStartNodeOp {
+	op := nmaStartNodeOp{}
+	op.name = "NMAStartNodeOp"
+	op.description = fmt.Sprintf("Start %d node(s)", len(hosts))
+	op.hosts = hosts
+	op.startupConf = startupConf
+	op.sandbox = false
+	return op
+}
+
+func makeNMAStartNodeOpAfterUnsandbox(startupConf string) nmaStartNodeOp {
+	startNodeOp := makeNMAStartNodeOp([]string{}, startupConf)
+	startNodeOp.sandbox = true
 	return startNodeOp
 }
 
-func makeNMAStartNodeOpWithVDB(log vlog.Printer, hosts []string, vdb *VCoordinationDatabase) nmaStartNodeOp {
-	startNodeOp := makeNMAStartNodeOp(log, hosts)
+func makeNMAStartNodeOpWithVDB(hosts []string, startupConf string, vdb *VCoordinationDatabase) nmaStartNodeOp {
+	startNodeOp := makeNMAStartNodeOp(hosts, startupConf)
 	startNodeOp.vdb = vdb
 	return startNodeOp
 }
 
-func (op *nmaStartNodeOp) updateRequestBody(execContext *OpEngineExecContext) error {
+func (op *nmaStartNodeOp) updateRequestBody(execContext *opEngineExecContext) error {
 	op.hostRequestBodyMap = make(map[string]string)
 	// If the execContext.StartUpCommand  is nil, we will use startup command information from NMA Read Catalog Editor.
 	// This case is used for certain operations (e.g., start_db, create_db) when the database is down,
@@ -55,10 +68,23 @@ func (op *nmaStartNodeOp) updateRequestBody(execContext *OpEngineExecContext) er
 		// {ip1:[/opt/vertica/bin/vertica -D /data/practice_db/v_practice_db_node0001_catalog -C
 		// practice_db -n v_practice_db_node0001 -h 192.168.1.101 -p 5433 -P 4803 -Y ipv4]}
 		hostStartCommandMap := make(map[string][]string)
-		for host, vnode := range op.vdb.HostNodeMap {
-			hoststartCommand, ok := execContext.startupCommandMap[vnode.Name]
-			if ok {
-				hostStartCommandMap[host] = hoststartCommand
+		if !op.sandbox {
+			for host, vnode := range op.vdb.HostNodeMap {
+				hoststartCommand, ok := execContext.startupCommandMap[vnode.Name]
+				if ok {
+					hostStartCommandMap[host] = hoststartCommand
+				}
+			}
+		} else {
+			if len(execContext.scNodesInfo) == 0 {
+				return fmt.Errorf(`[%s] Cannot find any node information of target subcluster in OpEngineExecContext`, op.name)
+			}
+			for _, vnode := range execContext.scNodesInfo {
+				op.hosts = append(op.hosts, vnode.Address)
+				hoststartCommand, ok := execContext.startupCommandMap[vnode.Name]
+				if ok {
+					hostStartCommandMap[vnode.Address] = hoststartCommand
+				}
 			}
 		}
 		for _, host := range op.hosts {
@@ -85,23 +111,24 @@ func (op *nmaStartNodeOp) updateRequestBody(execContext *OpEngineExecContext) er
 }
 
 func (op *nmaStartNodeOp) updateHostRequestBodyMapFromNodeStartCommand(host string, hostStartCommand []string) error {
-	type NodeStartCommand struct {
-		StartCommand []string `json:"start_command"`
+	startNodeData := startNodeRequestData{
+		StartCommand: hostStartCommand,
+		StartupConf:  op.startupConf,
 	}
-	nodeStartCommand := NodeStartCommand{StartCommand: hostStartCommand}
-	marshaledCommand, err := json.Marshal(nodeStartCommand)
+
+	dataBytes, err := json.Marshal(startNodeData)
 	if err != nil {
-		return fmt.Errorf("[%s] fail to marshal start command to JSON string %w", op.name, err)
+		return fmt.Errorf("[%s] fail to marshal request data to JSON string %w", op.name, err)
 	}
-	op.hostRequestBodyMap[host] = string(marshaledCommand)
+	op.hostRequestBodyMap[host] = string(dataBytes)
 	return nil
 }
 
 func (op *nmaStartNodeOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildNMAEndpoint("nodes/start")
+		httpRequest.buildNMAEndpoint("nodes/start")
 		httpRequest.RequestData = op.hostRequestBodyMap[host]
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
 	}
@@ -109,18 +136,18 @@ func (op *nmaStartNodeOp) setupClusterHTTPRequest(hosts []string) error {
 	return nil
 }
 
-func (op *nmaStartNodeOp) prepare(execContext *OpEngineExecContext) error {
+func (op *nmaStartNodeOp) prepare(execContext *opEngineExecContext) error {
 	err := op.updateRequestBody(execContext)
 	if err != nil {
 		return err
 	}
 
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *nmaStartNodeOp) execute(execContext *OpEngineExecContext) error {
+func (op *nmaStartNodeOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -128,7 +155,7 @@ func (op *nmaStartNodeOp) execute(execContext *OpEngineExecContext) error {
 	return op.processResult(execContext)
 }
 
-func (op *nmaStartNodeOp) finalize(_ *OpEngineExecContext) error {
+func (op *nmaStartNodeOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }
 
@@ -137,7 +164,7 @@ type startNodeResponse struct {
 	ReturnCode int    `json:"return_code"`
 }
 
-func (op *nmaStartNodeOp) processResult(_ *OpEngineExecContext) error {
+func (op *nmaStartNodeOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {

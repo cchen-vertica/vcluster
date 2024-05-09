@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -20,22 +20,73 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
+const startupOp = "startupOp"
+const generalStartNodeDesc = "Get Vertica startup command"
+const startNodeAfterUnsandboxDesc = "Get Vertica startup command for unsandboxed nodes"
+
 type httpsStartUpCommandOp struct {
-	OpBase
-	OpHTTPSBase
-	vdb *VCoordinationDatabase
+	opBase
+	opHTTPSBase
+	vdb     *VCoordinationDatabase
+	cmdType CommandType
+	sandbox string
 }
 
-func makeHTTPSStartUpCommandOp(log vlog.Printer, useHTTPPassword bool, userName string, httpsPassword *string,
+func makeHTTPSStartUpCommandOp(useHTTPPassword bool, userName string, httpsPassword *string,
 	vdb *VCoordinationDatabase) (httpsStartUpCommandOp, error) {
 	op := httpsStartUpCommandOp{}
-	op.name = "HTTPSStartUpCommandOp"
-	op.log = log.WithName(op.name)
+	op.name = startupOp
+	op.description = generalStartNodeDesc
 	op.useHTTPPassword = useHTTPPassword
 	op.vdb = vdb
+	op.sandbox = util.MainClusterSandbox
+
+	if useHTTPPassword {
+		err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
+		if err != nil {
+			return op, err
+		}
+
+		op.userName = userName
+		op.httpsPassword = httpsPassword
+	}
+
+	return op, nil
+}
+
+func makeHTTPSStartUpCommandOpAfterUnsandbox(useHTTPPassword bool, userName string,
+	httpsPassword *string) (httpsStartUpCommandOp, error) {
+	op := httpsStartUpCommandOp{}
+	op.name = startupOp
+	op.description = startNodeAfterUnsandboxDesc
+	op.useHTTPPassword = useHTTPPassword
+	op.cmdType = UnsandboxCmd
+	op.sandbox = util.MainClusterSandbox
+
+	if useHTTPPassword {
+		err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
+		if err != nil {
+			return op, err
+		}
+
+		op.userName = userName
+		op.httpsPassword = httpsPassword
+	}
+
+	return op, nil
+}
+
+// Use the response from an UP host of the specified sandbox
+func makeHTTPSStartUpCommandWithSandboxOp(useHTTPPassword bool, userName string, httpsPassword *string,
+	vdb *VCoordinationDatabase, sandbox string) (httpsStartUpCommandOp, error) {
+	op := httpsStartUpCommandOp{}
+	op.name = startupOp
+	op.description = generalStartNodeDesc
+	op.useHTTPPassword = useHTTPPassword
+	op.vdb = vdb
+	op.sandbox = sandbox
 
 	if useHTTPPassword {
 		err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
@@ -52,11 +103,9 @@ func makeHTTPSStartUpCommandOp(log vlog.Printer, useHTTPPassword bool, userName 
 
 func (op *httpsStartUpCommandOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = GetMethod
-
-		httpRequest.BuildHTTPSEndpoint("startup/commands")
-
+		httpRequest.buildHTTPSEndpoint("startup/commands")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -68,22 +117,32 @@ func (op *httpsStartUpCommandOp) setupClusterHTTPRequest(hosts []string) error {
 	return nil
 }
 
-func (op *httpsStartUpCommandOp) prepare(execContext *OpEngineExecContext) error {
+func (op *httpsStartUpCommandOp) prepare(execContext *opEngineExecContext) error {
 	// Use the /v1/startup/command endpoint for a primary Up host to view every start command of existing nodes
-	var primaryUpHosts []string
-	for host, vnode := range op.vdb.HostNodeMap {
-		if vnode.IsPrimary && vnode.State == util.NodeUpState {
-			primaryUpHosts = append(primaryUpHosts, host)
-			break
+	// With sandboxes in a cluster, we need to ensure that we pick a main cluster UP host
+	if op.cmdType == UnsandboxCmd {
+		for h, sb := range execContext.upHostsToSandboxes {
+			if sb == "" {
+				op.hosts = append(op.hosts, h)
+				break
+			}
 		}
+	} else {
+		var primaryUpHosts []string
+		for host, vnode := range op.vdb.HostNodeMap {
+			if vnode.IsPrimary && vnode.State == util.NodeUpState && vnode.Sandbox == op.sandbox {
+				primaryUpHosts = append(primaryUpHosts, host)
+				break
+			}
+		}
+		op.hosts = primaryUpHosts
 	}
-	op.hosts = primaryUpHosts
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *httpsStartUpCommandOp) execute(execContext *OpEngineExecContext) error {
+func (op *httpsStartUpCommandOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -91,12 +150,12 @@ func (op *httpsStartUpCommandOp) execute(execContext *OpEngineExecContext) error
 	return op.processResult(execContext)
 }
 
-func (op *httpsStartUpCommandOp) processResult(execContext *OpEngineExecContext) error {
+func (op *httpsStartUpCommandOp) processResult(execContext *opEngineExecContext) error {
 	var allErrs error
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
-		if result.IsUnauthorizedRequest() {
+		if result.isUnauthorizedRequest() {
 			return fmt.Errorf("[%s] wrong password/certificate for https service on host %s",
 				op.name, host)
 		}
@@ -152,6 +211,6 @@ func (op *httpsStartUpCommandOp) processResult(execContext *OpEngineExecContext)
 	return nil
 }
 
-func (op *httpsStartUpCommandOp) finalize(_ *OpEngineExecContext) error {
+func (op *httpsStartUpCommandOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }

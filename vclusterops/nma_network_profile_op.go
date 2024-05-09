@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -20,26 +20,25 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-type NMANetworkProfileOp struct {
-	OpBase
+type nmaNetworkProfileOp struct {
+	opBase
 }
 
-func makeNMANetworkProfileOp(log vlog.Printer, hosts []string) NMANetworkProfileOp {
-	nmaNetworkProfileOp := NMANetworkProfileOp{}
-	nmaNetworkProfileOp.name = "NMANetworkProfileOp"
-	nmaNetworkProfileOp.log = log.WithName(nmaNetworkProfileOp.name)
-	nmaNetworkProfileOp.hosts = hosts
-	return nmaNetworkProfileOp
+func makeNMANetworkProfileOp(hosts []string) nmaNetworkProfileOp {
+	op := nmaNetworkProfileOp{}
+	op.name = "NMANetworkProfileOp"
+	op.description = "Get network profile of cluster"
+	op.hosts = hosts
+	return op
 }
 
-func (op *NMANetworkProfileOp) setupClusterHTTPRequest(hosts []string) error {
+func (op *nmaNetworkProfileOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = GetMethod
-		httpRequest.BuildNMAEndpoint("network-profiles")
+		httpRequest.buildNMAEndpoint("network-profiles")
 		httpRequest.QueryParams = map[string]string{"broadcast-hint": host}
 
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
@@ -48,12 +47,12 @@ func (op *NMANetworkProfileOp) setupClusterHTTPRequest(hosts []string) error {
 	return nil
 }
 
-func (op *NMANetworkProfileOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+func (op *nmaNetworkProfileOp) prepare(execContext *opEngineExecContext) error {
+	execContext.dispatcher.setup(op.hosts)
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *NMANetworkProfileOp) execute(execContext *OpEngineExecContext) error {
+func (op *nmaNetworkProfileOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -61,11 +60,11 @@ func (op *NMANetworkProfileOp) execute(execContext *OpEngineExecContext) error {
 	return op.processResult(execContext)
 }
 
-func (op *NMANetworkProfileOp) finalize(_ *OpEngineExecContext) error {
+func (op *nmaNetworkProfileOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }
 
-type NetworkProfile struct {
+type networkProfile struct {
 	Name      string
 	Address   string
 	Subnet    string
@@ -73,10 +72,10 @@ type NetworkProfile struct {
 	Broadcast string
 }
 
-func (op *NMANetworkProfileOp) processResult(execContext *OpEngineExecContext) error {
+func (op *nmaNetworkProfileOp) processResult(execContext *opEngineExecContext) error {
 	var allErrs error
 
-	allNetProfiles := make(map[string]NetworkProfile)
+	allNetProfiles := make(map[string]networkProfile)
 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
@@ -100,8 +99,8 @@ func (op *NMANetworkProfileOp) processResult(execContext *OpEngineExecContext) e
 	return allErrs
 }
 
-func (op *NMANetworkProfileOp) parseResponse(host, resultContent string) (NetworkProfile, error) {
-	var responseObj NetworkProfile
+func (op *nmaNetworkProfileOp) parseResponse(host, resultContent string) (networkProfile, error) {
+	var responseObj networkProfile
 
 	// the response_obj will be a dictionary like the following:
 	// {

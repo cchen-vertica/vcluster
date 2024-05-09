@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -16,21 +16,9 @@
 package main
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/vertica/vcluster/commands"
 )
 
 func main() {
-	// use fmt for print info in this function, because the step of
-	// setting up logs could error out
-	fmt.Println("---{vcluster begin}---")
-	launcher, vcc := commands.MakeClusterCommandLauncher()
-	runError := launcher.Run(os.Args, vcc)
-	if runError != nil {
-		fmt.Printf("Error during execution: %s\n", runError)
-		os.Exit(1)
-	}
-	fmt.Println("---{vcluster end}---")
+	commands.Execute()
 }

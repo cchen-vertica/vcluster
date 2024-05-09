@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -17,7 +17,6 @@ package util
 
 import (
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -29,19 +28,54 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"time"
 
+	"golang.org/x/exp/constraints"
 	"golang.org/x/exp/slices"
 	"golang.org/x/sys/unix"
 
+	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/vertica/vcluster/vclusterops/vlog"
 )
+
+type FetchAllEnvVars interface {
+	SetK8Secrets(port, secretNameSpace, secretName string)
+	SetK8Certs(rootCAPath, certPath, keyPath string)
+	TypeName() string
+}
 
 const (
 	keyValueArrayLen = 2
 	ipv4Str          = "IPv4"
 	ipv6Str          = "IPv6"
 	AWSAuthKey       = "awsauth"
+	kubernetesPort   = "KUBERNETES_PORT"
+
+	// Environment variable names storing name of k8s secret that has NMA cert
+	secretNameSpaceEnvVar = "NMA_SECRET_NAMESPACE"
+	secretNameEnvVar      = "NMA_SECRET_NAME"
+
+	// Environment variable names for locating the NMA certs located in the file system
+	nmaRootCAPathEnvVar = "NMA_ROOTCA_PATH"
+	nmaCertPathEnvVar   = "NMA_CERT_PATH"
+	nmaKeyPathEnvVar    = "NMA_KEY_PATH"
 )
+
+// NmaSecretLookup retrieves kubernetes secrets.
+func NmaSecretLookup(f FetchAllEnvVars) {
+	k8port, _ := os.LookupEnv(kubernetesPort)
+	secretNameSpace, _ := os.LookupEnv(secretNameSpaceEnvVar)
+	secretName, _ := os.LookupEnv(secretNameEnvVar)
+	f.SetK8Secrets(k8port, secretNameSpace, secretName)
+}
+
+// NmaCertsLookup retrieves kubernetes certs.
+func NmaCertsLookup(f FetchAllEnvVars) {
+	rootCAPath, _ := os.LookupEnv(nmaRootCAPathEnvVar)
+	certPath, _ := os.LookupEnv(nmaCertPathEnvVar)
+	keyPath, _ := os.LookupEnv(nmaKeyPathEnvVar)
+	f.SetK8Certs(rootCAPath, certPath, keyPath)
+}
 
 func GetJSONLogErrors(responseContent string, responseObj any, opName string, logger vlog.Printer) error {
 	err := json.Unmarshal([]byte(responseContent), responseObj)
@@ -58,6 +92,28 @@ func GetJSONLogErrors(responseContent string, responseObj any, opName string, lo
 	return nil
 }
 
+func CheckNotEmpty(a string) bool {
+	return a != ""
+}
+
+func CheckAllEmptyOrNonEmpty(vars ...string) bool {
+	// Initialize flags for empty and non-empty conditions
+	allEmpty := true
+	allNonEmpty := true
+
+	// Check each string variable
+	for _, v := range vars {
+		if v != "" {
+			allEmpty = false
+		} else {
+			allNonEmpty = false
+		}
+	}
+
+	// Return true if either all are empty or all are non-empty
+	return allEmpty || allNonEmpty
+}
+
 // calculate array diff: m-n
 func SliceDiff[K comparable](m, n []K) []K {
 	nSet := make(map[K]struct{}, len(n))
@@ -72,6 +128,16 @@ func SliceDiff[K comparable](m, n []K) []K {
 		}
 	}
 	return diff
+}
+
+// calculate and sort array commonalities: m ∩ n
+func SliceCommon[K constraints.Ordered](m, n []K) []K {
+	mSet := mapset.NewSet[K](m...)
+	nSet := mapset.NewSet[K](n...)
+	common := mSet.Intersect(nSet).ToSlice()
+	slices.Sort(common)
+
+	return common
 }
 
 // calculate diff of map keys: m-n
@@ -156,11 +222,15 @@ func ResolveToAbsPath(path string) (string, error) {
 
 // IP util functions
 func IsIPv4(ip string) bool {
-	return net.ParseIP(ip).To4() != nil
+	// To4() may not return nil even if the given address is ipv6
+	// we need to double check whether the ip string contains `:`
+	return !strings.Contains(ip, ":") && net.ParseIP(ip).To4() != nil
 }
 
 func IsIPv6(ip string) bool {
-	return net.ParseIP(ip).To16() != nil
+	// To16() may not return nil even if the given address is ipv4
+	// we need to double check whether the ip string contains `:`
+	return strings.Contains(ip, ":") && net.ParseIP(ip).To16() != nil
 }
 
 func AddressCheck(address string, ipv6 bool) error {
@@ -217,14 +287,26 @@ func ResolveToOneIP(hostname string, ipv6 bool) (string, error) {
 	if ipv6 && IsIPv6(hostname) {
 		return hostname, nil
 	}
+
+	// resolve host name to address
 	addrs, err := ResolveToIPAddrs(hostname, ipv6)
 	// contains the case where the hostname cannot be resolved to be IP
 	if err != nil {
 		return "", err
 	}
+
+	ipVersion := ipv4Str
+	if ipv6 {
+		ipVersion = ipv6Str
+	}
+	if len(addrs) == 0 {
+		return "", fmt.Errorf("cannot resolve %s as %s address", hostname, ipVersion)
+	}
+
 	if len(addrs) > 1 {
 		return "", fmt.Errorf("%s is resolved to more than one IP addresss: %v", hostname, addrs)
 	}
+
 	return addrs[0], nil
 }
 
@@ -265,15 +347,21 @@ func AbsPathCheck(dirPath string) error {
 	return nil
 }
 
-func SplitHosts(hosts string) ([]string, error) {
-	if strings.TrimSpace(hosts) == "" {
-		return []string{}, fmt.Errorf("must specify a host or host list")
+// ParseHostList will trim spaces and convert all chars to lowercase in the hosts
+func ParseHostList(hosts *[]string) error {
+	var parsedHosts []string
+	for _, host := range *hosts {
+		parsedHost := strings.TrimSpace(strings.ToLower(host))
+		if parsedHost != "" {
+			parsedHosts = append(parsedHosts, parsedHost)
+		}
 	}
-	splitRes := strings.Split(strings.ToLower(strings.TrimSpace(hosts)), ",")
-	for i, host := range splitRes {
-		splitRes[i] = strings.TrimSpace(host)
+	if len(parsedHosts) == 0 {
+		return fmt.Errorf("must specify a host or host list")
 	}
-	return splitRes, nil
+
+	*hosts = parsedHosts
+	return nil
 }
 
 // get env var with a fallback value
@@ -324,9 +412,9 @@ func CanReadAccessDir(dirPath string) error {
 }
 
 // Check whether the directory is read accessible
-func CanWriteAccessDir(dirPath string) int {
+func CanWriteAccessPath(path string) int {
 	// check whether the path exists
-	_, err := os.Stat(dirPath)
+	_, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return FileNotExist
@@ -334,8 +422,8 @@ func CanWriteAccessDir(dirPath string) int {
 	}
 
 	// check whether the path has write access
-	if err := unix.Access(dirPath, unix.W_OK); err != nil {
-		log.Printf("Path '%s' is not writable.\n", dirPath)
+	if err := unix.Access(path, unix.W_OK); err != nil {
+		log.Printf("Path '%s' is not writable.\n", path)
 		return NoWritePerm
 	}
 
@@ -395,80 +483,31 @@ func SetParserUsage(parser *flag.FlagSet, op string) {
 	})
 }
 
-func GetOptionalFlagMsg(message string) string {
-	return message + " [Optional]"
-}
-
 func GetEonFlagMsg(message string) string {
 	return "[Eon only] " + message
 }
 
-func ValidateAbsPath(path *string, pathName string) error {
-	if path != nil {
-		err := AbsPathCheck(*path)
-		if err != nil {
-			return fmt.Errorf("must specify an absolute %s", pathName)
-		}
+func ValidateAbsPath(path, pathName string) error {
+	err := AbsPathCheck(path)
+	if err != nil {
+		return fmt.Errorf("must specify an absolute %s", pathName)
 	}
+
 	return nil
 }
 
 // ValidateRequiredAbsPath check whether a required path is set
 // then validate it
-func ValidateRequiredAbsPath(path *string, pathName string) error {
-	pathNotSpecifiedMsg := fmt.Sprintf("must specify an absolute %s", pathName)
-
-	if path != nil {
-		if *path == "" {
-			return errors.New(pathNotSpecifiedMsg)
-		}
-		return ValidateAbsPath(path, pathName)
+func ValidateRequiredAbsPath(path, pathName string) error {
+	if path == "" {
+		return fmt.Errorf("must specify an absolute %s", pathName)
 	}
 
-	return errors.New(pathNotSpecifiedMsg)
+	return ValidateAbsPath(path, pathName)
 }
 
 func ParamNotSetErrorMsg(param string) error {
 	return fmt.Errorf("%s is pointed to nil", param)
-}
-
-// ParseConfigParams builds and returns a map from a comma-separated list of params.
-func ParseConfigParams(configParamListStr string) (map[string]string, error) {
-	return ParseKeyValueListStr(configParamListStr, "config-param")
-}
-
-// ParseKeyValueListStr converts a comma-separated list of key-value pairs into a map.
-// Ex: key1=val1,key2=val2 ---> map[string]string{key1: val1, key2: val2}
-func ParseKeyValueListStr(listStr, opt string) (map[string]string, error) {
-	if listStr == "" {
-		return nil, nil
-	}
-	list := strings.Split(strings.TrimSpace(listStr), ",")
-	// passed an empty string to the given flag
-	if len(list) == 0 {
-		return nil, nil
-	}
-
-	listMap := make(map[string]string)
-	for _, param := range list {
-		// expected to see key value pairs of the format key=value
-		keyValue := strings.Split(param, "=")
-		if len(keyValue) != keyValueArrayLen {
-			return nil, fmt.Errorf("--%s option must take NAME=VALUE as argument: %s is invalid", opt, param)
-		} else if len(keyValue) > 0 && strings.TrimSpace(keyValue[0]) == "" {
-			return nil, fmt.Errorf("--%s option must take NAME=VALUE as argument with NAME being non-empty: %s is invalid", opt, param)
-		}
-		key := strings.TrimSpace(keyValue[0])
-		// the user is possible to set aws auth key to different strings like "awsauth" and "AWSAuth"
-		// we convert aws auth key to lowercase for easy retrieval in vclusterops
-		if strings.EqualFold(key, AWSAuthKey) {
-			key = strings.ToLower(key)
-		}
-		// we allow empty string value
-		value := strings.TrimSpace(keyValue[1])
-		listMap[key] = value
-	}
-	return listMap, nil
 }
 
 // GenVNodeName generates a vnode and returns it after checking it is not already
@@ -520,11 +559,84 @@ func ValidateCommunalStorageLocation(location string) error {
 		return fmt.Errorf("must specify a communal storage location")
 	}
 
-	// reject communal storage location with ":/"
-	re := regexp.MustCompile(":/?[^/]")
-	if re.MatchString(location) {
-		return fmt.Errorf("invalid separator found in communal storage location, use :// instead of : or :/")
+	// create a regex to accept valid urls like "s3://vertica-fleeting/k8s/revive_eon_5"
+	re := regexp.MustCompile("^[0-9a-zA-Z]+://[^/]+(/[^/]+)*/?$")
+	// check if communal location is a valid local path or a valid remote url path
+	if !IsAbsPath(location) && !re.MatchString(location) {
+		return fmt.Errorf("communal storage path is invalid: use an absolute local path or a correct remote url path")
 	}
 
 	return nil
+}
+
+// Max works on all sane types, not just float64 like the math package funcs.
+// Can be removed after upgrade to go 1.21 (VER-90410) as min/max become builtins.
+func Max[T constraints.Ordered](a, b T) T {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// GetPathPrefix returns a path prefix for a (catalog/data/depot) path of a node
+func GetPathPrefix(path string) string {
+	return filepath.Dir(filepath.Dir(path))
+}
+
+// default date time format: this omits nanoseconds but is still able to parse those out
+const DefaultDateTimeFormat = time.DateTime
+
+// default date time format: this includes nanoseconds
+const DefaultDateTimeNanoSecFormat = time.DateTime + ".000000000"
+
+// default date only format: this omits time within a date
+const DefaultDateOnlyFormat = time.DateOnly
+
+// import time package in this util file so other files don't need to import time
+// wrapper function to handle empty input string, returns an error if the time is invalid
+// caller responsible for passing in correct layout
+func IsEmptyOrValidTimeStr(layout, value string) (*time.Time, error) {
+	if value == "" {
+		return nil, nil
+	}
+	parsedTime, err := time.Parse(layout, value)
+	if err != nil {
+		return nil, err
+	}
+	return &parsedTime, nil
+}
+
+func fillInDefaultTimeForTimestampHelper(parsedDate time.Time, hour, minute, second,
+	nanosecond int) (string, time.Time) {
+	year, month, day := parsedDate.Year(), parsedDate.Month(), parsedDate.Day()
+	location := parsedDate.Location() // Extracting the timezone
+	datetime := time.Date(year, month, day, hour, minute, second, nanosecond, location)
+	formatedDatetime := datetime.Format(DefaultDateTimeNanoSecFormat)
+	return formatedDatetime, datetime
+}
+
+// Read date only string from argument, fill in time, overwrite argument by date time string, and return parsed time,
+// the filled in time will indicate the beginning of a day
+func FillInDefaultTimeForStartTimestamp(dateonly *string) *time.Time {
+	parsedDate, _ := time.Parse(DefaultDateOnlyFormat, *dateonly)
+	formatedDatetime, datetime := fillInDefaultTimeForTimestampHelper(parsedDate, 0, 0, 0, 0)
+	*dateonly = formatedDatetime
+	return &datetime
+}
+
+// Read date only string from argument, fill in time, overwrite argument by date time string, and return parsed time,
+// the filled in time will indicate the end of a day (right before the beginning of the following day)
+func FillInDefaultTimeForEndTimestamp(dateonly *string) *time.Time {
+	parsedDate, _ := time.Parse(DefaultDateOnlyFormat, *dateonly)
+	const lastHour = 23
+	const lastMin = 59
+	const lastSec = 59
+	const lastNanoSec = 999999999
+	formatedDatetime, datetime := fillInDefaultTimeForTimestampHelper(parsedDate, lastHour, lastMin, lastSec, lastNanoSec)
+	*dateonly = formatedDatetime
+	return &datetime
+}
+
+func IsTimeEqualOrAfter(start, end time.Time) bool {
+	return end.Equal(start) || end.After(start)
 }

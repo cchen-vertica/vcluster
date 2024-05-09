@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -19,23 +19,22 @@ import (
 	"errors"
 
 	"github.com/vertica/vcluster/vclusterops/util"
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-type HTTPSMarkEphemeralNodeOp struct {
-	OpBase
-	OpHTTPSBase
+type httpsMarkEphemeralNodeOp struct {
+	opBase
+	opHTTPSBase
 	targetNodeName string
 }
 
-func makeHTTPSMarkEphemeralNodeOp(log vlog.Printer, nodeName string,
+func makeHTTPSMarkEphemeralNodeOp(nodeName string,
 	initiatorHost []string,
 	useHTTPPassword bool,
 	userName string,
-	httpsPassword *string) (HTTPSMarkEphemeralNodeOp, error) {
-	op := HTTPSMarkEphemeralNodeOp{}
+	httpsPassword *string) (httpsMarkEphemeralNodeOp, error) {
+	op := httpsMarkEphemeralNodeOp{}
 	op.name = "HTTPSMarkEphemeralNodeOp"
-	op.log = log.WithName(op.name)
+	op.description = "Change node type to ephemeral"
 	op.hosts = initiatorHost
 	op.targetNodeName = nodeName
 	op.useHTTPPassword = useHTTPPassword
@@ -48,11 +47,11 @@ func makeHTTPSMarkEphemeralNodeOp(log vlog.Printer, nodeName string,
 	return op, nil
 }
 
-func (op *HTTPSMarkEphemeralNodeOp) setupClusterHTTPRequest(hosts []string) error {
+func (op *httpsMarkEphemeralNodeOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildHTTPSEndpoint("nodes/" + op.targetNodeName + "/ephemeral")
+		httpRequest.buildHTTPSEndpoint("nodes/" + op.targetNodeName + "/ephemeral")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -62,12 +61,12 @@ func (op *HTTPSMarkEphemeralNodeOp) setupClusterHTTPRequest(hosts []string) erro
 	return nil
 }
 
-func (op *HTTPSMarkEphemeralNodeOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+func (op *httpsMarkEphemeralNodeOp) prepare(execContext *opEngineExecContext) error {
+	execContext.dispatcher.setup(op.hosts)
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *HTTPSMarkEphemeralNodeOp) execute(execContext *OpEngineExecContext) error {
+func (op *httpsMarkEphemeralNodeOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -75,13 +74,13 @@ func (op *HTTPSMarkEphemeralNodeOp) execute(execContext *OpEngineExecContext) er
 	return op.processResult(execContext)
 }
 
-func (op *HTTPSMarkEphemeralNodeOp) processResult(_ *OpEngineExecContext) error {
+func (op *httpsMarkEphemeralNodeOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
-		if !result.IsSuccess() {
+		if !result.isSuccess() {
 			allErrs = errors.Join(allErrs, result.err)
 			continue
 		}
@@ -89,6 +88,6 @@ func (op *HTTPSMarkEphemeralNodeOp) processResult(_ *OpEngineExecContext) error 
 	return allErrs
 }
 
-func (op *HTTPSMarkEphemeralNodeOp) finalize(_ *OpEngineExecContext) error {
+func (op *httpsMarkEphemeralNodeOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }

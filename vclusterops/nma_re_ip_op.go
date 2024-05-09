@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -19,26 +19,29 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-type NMAReIPOp struct {
-	OpBase
+type nmaReIPOp struct {
+	opBase
 	reIPList             []ReIPInfo
 	vdb                  *VCoordinationDatabase
 	primaryNodeCount     uint
 	hostRequestBodyMap   map[string]string
 	mapHostToNodeName    map[string]string
 	mapHostToCatalogPath map[string]string
+	trimReIPData         bool
 }
 
-func makeNMAReIPOp(log vlog.Printer, reIPList []ReIPInfo, vdb *VCoordinationDatabase) NMAReIPOp {
-	op := NMAReIPOp{}
+func makeNMAReIPOp(
+	reIPList []ReIPInfo,
+	vdb *VCoordinationDatabase,
+	trimReIPData bool) nmaReIPOp {
+	op := nmaReIPOp{}
 	op.name = "NMAReIPOp"
-	op.log = log.WithName(op.name)
+	op.description = "Update node IPs in catalog"
 	op.reIPList = reIPList
 	op.vdb = vdb
+	op.trimReIPData = trimReIPData
 	return op
 }
 
@@ -55,7 +58,7 @@ type reIPParams struct {
 	ReIPInfoList []ReIPInfo `json:"re_ip_list"`
 }
 
-func (op *NMAReIPOp) updateRequestBody(_ *OpEngineExecContext) error {
+func (op *nmaReIPOp) updateRequestBody(_ *opEngineExecContext) error {
 	op.hostRequestBodyMap = make(map[string]string)
 
 	for _, host := range op.hosts {
@@ -64,21 +67,21 @@ func (op *NMAReIPOp) updateRequestBody(_ *OpEngineExecContext) error {
 		p.ReIPInfoList = op.reIPList
 		dataBytes, err := json.Marshal(p)
 		if err != nil {
-			op.log.Error(err, `[%s] fail to marshal request data to JSON string, detail %s`, op.name)
+			op.logger.Error(err, `[%s] fail to marshal request data to JSON string, detail %s`, op.name)
 			return err
 		}
 		op.hostRequestBodyMap[host] = string(dataBytes)
 	}
 
-	op.log.Info("request data", "op name", op.name, "hostRequestBodyMap", op.hostRequestBodyMap)
+	op.logger.Info("request data", "op name", op.name, "hostRequestBodyMap", op.hostRequestBodyMap)
 	return nil
 }
 
-func (op *NMAReIPOp) setupClusterHTTPRequest(hosts []string) error {
+func (op *nmaReIPOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PutMethod
-		httpRequest.BuildNMAEndpoint("catalog/re-ip")
+		httpRequest.buildNMAEndpoint("catalog/re-ip")
 		httpRequest.RequestData = op.hostRequestBodyMap[host]
 
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
@@ -88,7 +91,7 @@ func (op *NMAReIPOp) setupClusterHTTPRequest(hosts []string) error {
 }
 
 // updateReIPList is used for the vcluster CLI to update node names
-func (op *NMAReIPOp) updateReIPList(execContext *OpEngineExecContext) error {
+func (op *nmaReIPOp) updateReIPList(execContext *opEngineExecContext) error {
 	hostNodeMap := execContext.nmaVDatabase.HostNodeMap
 
 	for i := 0; i < len(op.reIPList); i++ {
@@ -121,7 +124,67 @@ func (op *NMAReIPOp) updateReIPList(execContext *OpEngineExecContext) error {
 	return nil
 }
 
-func (op *NMAReIPOp) prepare(execContext *OpEngineExecContext) error {
+// trimReIPList removes nodes, based on catalog editor info,
+// which are not among the nodes with latest catalog
+func (op *nmaReIPOp) trimReIPList(execContext *opEngineExecContext) error {
+	nodeNamesWithLatestCatalog := make(map[string]struct{})
+	for i := range execContext.nmaVDatabase.Nodes {
+		vnode := execContext.nmaVDatabase.Nodes[i]
+		nodeNamesWithLatestCatalog[vnode.Name] = struct{}{}
+	}
+
+	var trimmedReIPList []ReIPInfo
+	nodesToTrim := make(map[string]string)
+	for _, reIPInfo := range op.reIPList {
+		if _, exist := nodeNamesWithLatestCatalog[reIPInfo.NodeName]; exist {
+			trimmedReIPList = append(trimmedReIPList, reIPInfo)
+		} else {
+			nodesToTrim[reIPInfo.NodeName] = reIPInfo.NodeAddress
+		}
+	}
+
+	if len(nodesToTrim) > 0 {
+		// throw an error if not automatically trim the re-ip list
+		if !op.trimReIPData {
+			return fmt.Errorf("[%s] the following nodes from the re-ip list do not exist in the catalog: %+v",
+				op.name, nodesToTrim)
+		}
+
+		// otherwise, trim the re-ip list
+		op.logger.Info("re-ip list is trimmed", "trimmed re-ip list", trimmedReIPList)
+	}
+
+	op.reIPList = trimmedReIPList
+	return nil
+}
+
+// whetherSkipReIP decides whether skip calling the re-ip endpoint; skip it in case that
+// the target addresses in the re-ip list match the node addresses in catalog.
+// Return true if skip.
+func (op *nmaReIPOp) whetherSkipReIP(execContext *opEngineExecContext) bool {
+	// node name to address map retrieved from catalog
+	nodeAddressMap := make(map[string]string)
+	for h, n := range execContext.nmaVDatabase.HostNodeMap {
+		nodeAddressMap[n.Name] = h
+	}
+
+	// we should run re-ip if any node's target address is different from its existing one
+	for _, reIPInfo := range op.reIPList {
+		nodeAddress, exist := nodeAddressMap[reIPInfo.NodeName]
+		if !exist {
+			return false
+		}
+		if reIPInfo.TargetAddress != nodeAddress {
+			return false
+		}
+	}
+
+	op.logger.PrintInfo("[%s] all target addresses already exist in the catalog, no need to re-ip.",
+		op.name)
+	return true
+}
+
+func (op *nmaReIPOp) prepare(execContext *opEngineExecContext) error {
 	// build mapHostToNodeName and catalogPathMap from vdb
 	op.mapHostToNodeName = make(map[string]string)
 	op.mapHostToCatalogPath = make(map[string]string)
@@ -164,17 +227,30 @@ func (op *NMAReIPOp) prepare(execContext *OpEngineExecContext) error {
 		return fmt.Errorf("[%s] error updating reIP list: %w", op.name, err)
 	}
 
+	// trim re-ip list for clients such as K8s
+	err = op.trimReIPList(execContext)
+	if err != nil {
+		return err
+	}
+
+	// if no new IP provided in the re-ip list
+	// we will skip calling the re-ip endpoint
+	if op.whetherSkipReIP(execContext) {
+		op.skipExecute = true
+		return nil
+	}
+
 	// build request body for hosts
 	err = op.updateRequestBody(execContext)
 	if err != nil {
 		return err
 	}
 
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *NMAReIPOp) execute(execContext *OpEngineExecContext) error {
+func (op *nmaReIPOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -182,11 +258,11 @@ func (op *NMAReIPOp) execute(execContext *OpEngineExecContext) error {
 	return op.processResult(execContext)
 }
 
-func (op *NMAReIPOp) finalize(_ *OpEngineExecContext) error {
+func (op *nmaReIPOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }
 
-func (op *NMAReIPOp) processResult(_ *OpEngineExecContext) error {
+func (op *nmaReIPOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 	var successCount uint
 	for host, result := range op.clusterHTTPRequest.ResultCollection {

@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -20,11 +20,15 @@ import (
 	"fmt"
 
 	"github.com/vertica/vcluster/vclusterops/util"
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-type NMADownloadConfigOp struct {
-	OpBase
+const (
+	spreadConf  = "config/spread"
+	verticaConf = "config/vertica"
+)
+
+type nmaDownloadConfigOp struct {
+	opBase
 	catalogPathMap map[string]string
 	endpoint       string
 	fileContent    *string
@@ -32,29 +36,32 @@ type NMADownloadConfigOp struct {
 }
 
 func makeNMADownloadConfigOp(
-	log vlog.Printer,
 	opName string,
 	sourceConfigHost []string,
 	endpoint string,
 	fileContent *string,
 	vdb *VCoordinationDatabase,
-) NMADownloadConfigOp {
-	nmaDownloadConfigOp := NMADownloadConfigOp{}
-	nmaDownloadConfigOp.name = opName
-	nmaDownloadConfigOp.log = log.WithName(nmaDownloadConfigOp.name)
-	nmaDownloadConfigOp.hosts = sourceConfigHost
-	nmaDownloadConfigOp.endpoint = endpoint
-	nmaDownloadConfigOp.fileContent = fileContent
-	nmaDownloadConfigOp.vdb = vdb
+) nmaDownloadConfigOp {
+	op := nmaDownloadConfigOp{}
+	op.name = opName
+	op.hosts = sourceConfigHost
+	op.endpoint = endpoint
+	if op.endpoint == verticaConf {
+		op.description = "Get contents of vertica.conf"
+	} else if op.endpoint == spreadConf {
+		op.description = "Get contents of spread.conf"
+	}
+	op.fileContent = fileContent
+	op.vdb = vdb
 
-	return nmaDownloadConfigOp
+	return op
 }
 
-func (op *NMADownloadConfigOp) setupClusterHTTPRequest(hosts []string) error {
+func (op *nmaDownloadConfigOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = GetMethod
-		httpRequest.BuildNMAEndpoint(op.endpoint)
+		httpRequest.buildNMAEndpoint(op.endpoint)
 
 		catalogPath, ok := op.catalogPathMap[host]
 		if !ok {
@@ -68,17 +75,27 @@ func (op *NMADownloadConfigOp) setupClusterHTTPRequest(hosts []string) error {
 	return nil
 }
 
-func (op *NMADownloadConfigOp) prepare(execContext *OpEngineExecContext) error {
+func (op *nmaDownloadConfigOp) prepare(execContext *opEngineExecContext) error {
 	op.catalogPathMap = make(map[string]string)
 	// vdb is built by calling /cluster and /nodes endpoints of a running db.
 	// If nodes' info is not available in vdb, we will get the host from execContext.nmaVDatabase which is build by reading the catalog editor
 	if op.vdb == nil || len(op.vdb.HostNodeMap) == 0 {
+		nmaVDB := execContext.nmaVDatabase
 		if op.hosts == nil {
-			// If the host input is a nil value, we find the host with the latest catalog version to update the host input.
-			// Otherwise, we use the host input.
-			hostsWithLatestCatalog := execContext.hostsWithLatestCatalog
-			if len(hostsWithLatestCatalog) == 0 {
-				return fmt.Errorf("could not find at least one host with the latest catalog")
+			var hostsWithLatestCatalog []string
+			// If SpreadEncryption is enabled, the primary node with the latest catalog will be the sourceConfigHost.
+			if nmaVDB.SpreadEncryption != "" {
+				hostsWithLatestCatalog = getPrimaryHostsWithLatestCatalog(&nmaVDB, execContext.hostsWithLatestCatalog, execContext)
+				if len(hostsWithLatestCatalog) == 0 {
+					return fmt.Errorf("could not find at least one primary host with the latest catalog")
+				}
+			} else {
+				// If the host input is a nil value, we find the host with the latest catalog version to update the host input.
+				// Otherwise, we use the host input.
+				hostsWithLatestCatalog = execContext.hostsWithLatestCatalog
+				if len(hostsWithLatestCatalog) == 0 {
+					return fmt.Errorf("could not find at least one host with the latest catalog")
+				}
 			}
 			hostWithLatestCatalog := hostsWithLatestCatalog[:1]
 			// update the host with the latest catalog
@@ -86,7 +103,6 @@ func (op *NMADownloadConfigOp) prepare(execContext *OpEngineExecContext) error {
 		}
 		// For createDb and AddNodes, sourceConfigHost input is the bootstrap host.
 		// we update the catalogPathMap for next download operation's steps from information of catalog editor
-		nmaVDB := execContext.nmaVDatabase
 		err := updateCatalogPathMapFromCatalogEditor(op.hosts, &nmaVDB, op.catalogPathMap)
 		if err != nil {
 			return fmt.Errorf("failed to get catalog paths from catalog editor: %w", err)
@@ -112,12 +128,12 @@ func (op *NMADownloadConfigOp) prepare(execContext *OpEngineExecContext) error {
 		op.hosts = primaryUpHosts
 	}
 
-	execContext.dispatcher.Setup(op.hosts)
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *NMADownloadConfigOp) execute(execContext *OpEngineExecContext) error {
+func (op *nmaDownloadConfigOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -125,16 +141,16 @@ func (op *NMADownloadConfigOp) execute(execContext *OpEngineExecContext) error {
 	return op.processResult(execContext)
 }
 
-func (op *NMADownloadConfigOp) finalize(_ *OpEngineExecContext) error {
+func (op *nmaDownloadConfigOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }
 
-func (op *NMADownloadConfigOp) processResult(_ *OpEngineExecContext) error {
+func (op *nmaDownloadConfigOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		// VER-88362 will re-enable the result details and hide sensitive info in it
-		op.log.PrintInfo("[%s] result from host %s summary %s",
-			op.name, host, result.status.getStatusString())
+		op.logger.Info("Download config file result",
+			"op name", op.name, "host", host, "status", result.status.getStatusString())
 		if result.isPassing() {
 			// The content of config file will be stored as content of the response
 			*op.fileContent = result.content

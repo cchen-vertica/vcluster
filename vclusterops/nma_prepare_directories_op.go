@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -20,12 +20,11 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/vertica/vcluster/vclusterops/vlog"
 	"golang.org/x/exp/maps"
 )
 
-type NMAPrepareDirectoriesOp struct {
-	OpBase
+type nmaPrepareDirectoriesOp struct {
+	opBase
 	hostRequestBodyMap map[string]string
 	forceCleanup       bool
 	forRevive          bool
@@ -41,25 +40,25 @@ type prepareDirectoriesRequestData struct {
 	IgnoreParent         bool     `json:"ignore_parent"`
 }
 
-func makeNMAPrepareDirectoriesOp(log vlog.Printer, hostNodeMap vHostNodeMap,
-	forceCleanup, forRevive bool) (NMAPrepareDirectoriesOp, error) {
-	nmaPrepareDirectoriesOp := NMAPrepareDirectoriesOp{}
-	nmaPrepareDirectoriesOp.name = "NMAPrepareDirectoriesOp"
-	nmaPrepareDirectoriesOp.log = log.WithName(nmaPrepareDirectoriesOp.name)
-	nmaPrepareDirectoriesOp.forceCleanup = forceCleanup
-	nmaPrepareDirectoriesOp.forRevive = forRevive
+func makeNMAPrepareDirectoriesOp(hostNodeMap vHostNodeMap,
+	forceCleanup, forRevive bool) (nmaPrepareDirectoriesOp, error) {
+	op := nmaPrepareDirectoriesOp{}
+	op.name = "NMAPrepareDirectoriesOp"
+	op.description = "Create necessary directories on Vertica hosts"
+	op.forceCleanup = forceCleanup
+	op.forRevive = forRevive
 
-	err := nmaPrepareDirectoriesOp.setupRequestBody(hostNodeMap)
+	err := op.setupRequestBody(hostNodeMap)
 	if err != nil {
-		return nmaPrepareDirectoriesOp, err
+		return op, err
 	}
 
-	nmaPrepareDirectoriesOp.hosts = maps.Keys(hostNodeMap)
+	op.hosts = maps.Keys(hostNodeMap)
 
-	return nmaPrepareDirectoriesOp, nil
+	return op, nil
 }
 
-func (op *NMAPrepareDirectoriesOp) setupRequestBody(hostNodeMap vHostNodeMap) error {
+func (op *nmaPrepareDirectoriesOp) setupRequestBody(hostNodeMap vHostNodeMap) error {
 	op.hostRequestBodyMap = make(map[string]string)
 
 	for host := range hostNodeMap {
@@ -79,16 +78,16 @@ func (op *NMAPrepareDirectoriesOp) setupRequestBody(hostNodeMap vHostNodeMap) er
 
 		op.hostRequestBodyMap[host] = string(dataBytes)
 	}
-	op.log.Info("request data", "op name", op.name, "hostRequestBodyMap", op.hostRequestBodyMap)
+	op.logger.Info("request data", "op name", op.name, "hostRequestBodyMap", op.hostRequestBodyMap)
 
 	return nil
 }
 
-func (op *NMAPrepareDirectoriesOp) setupClusterHTTPRequest(hosts []string) error {
+func (op *nmaPrepareDirectoriesOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildNMAEndpoint("directories/prepare")
+		httpRequest.buildNMAEndpoint("directories/prepare")
 		httpRequest.RequestData = op.hostRequestBodyMap[host]
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
 	}
@@ -96,12 +95,12 @@ func (op *NMAPrepareDirectoriesOp) setupClusterHTTPRequest(hosts []string) error
 	return nil
 }
 
-func (op *NMAPrepareDirectoriesOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+func (op *nmaPrepareDirectoriesOp) prepare(execContext *opEngineExecContext) error {
+	execContext.dispatcher.setup(op.hosts)
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *NMAPrepareDirectoriesOp) execute(execContext *OpEngineExecContext) error {
+func (op *nmaPrepareDirectoriesOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -109,11 +108,11 @@ func (op *NMAPrepareDirectoriesOp) execute(execContext *OpEngineExecContext) err
 	return op.processResult(execContext)
 }
 
-func (op *NMAPrepareDirectoriesOp) finalize(_ *OpEngineExecContext) error {
+func (op *nmaPrepareDirectoriesOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }
 
-func (op *NMAPrepareDirectoriesOp) processResult(_ *OpEngineExecContext) error {
+func (op *nmaPrepareDirectoriesOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
