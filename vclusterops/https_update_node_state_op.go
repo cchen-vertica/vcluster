@@ -39,7 +39,7 @@ func makeHTTPSUpdateNodeStateOp(vdb *VCoordinationDatabase,
 	op.description = "Update node state from running database"
 	op.vdb = vdb
 	op.useHTTPPassword = useHTTPPassword
-	op.httpRequestTimeout = defaultHTTPRequestTimeoutSeconds
+	op.httpRequestTimeout = defaultHTTPSRequestTimeoutSeconds
 
 	err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
 	if err != nil {
