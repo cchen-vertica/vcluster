@@ -159,6 +159,12 @@ func (vcc VClusterCommands) getVDBFromRunningDB(vdb *VCoordinationDatabase, opti
 	return vcc.getVDBFromRunningDBImpl(vdb, options, false, util.MainClusterSandbox)
 }
 
+// getVDBFromRunningDBContainsSandbox will retrieve db configurations from a non-sandboxed host by calling https endpoints of
+// a running db, and it can return the accurate state of the sandboxed ndoes.
+func (vcc VClusterCommands) getVDBFromRunningDBContainsSandbox(vdb *VCoordinationDatabase, options *DatabaseOptions) error {
+	return vcc.getVDBFromRunningDBImpl(vdb, options, true, util.MainClusterSandbox)
+}
+
 // getVDBFromRunningDB will retrieve db configurations from any UP host by calling https endpoints of a running db
 func (vcc VClusterCommands) getVDBFromRunningDBIncludeSandbox(vdb *VCoordinationDatabase, options *DatabaseOptions, sandbox string) error {
 	return vcc.getVDBFromRunningDBImpl(vdb, options, true, sandbox)

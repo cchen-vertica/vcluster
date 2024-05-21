@@ -104,7 +104,7 @@ func (e *SubclusterNotSandboxedError) Error() string {
 // - Get cluster and nodes info (check if the DB is Eon)
 // - Get the subcluster info (check if the target subcluster is sandboxed)
 func (vcc *VClusterCommands) unsandboxPreCheck(vdb *VCoordinationDatabase, options *VUnsandboxOptions) error {
-	err := vcc.getVDBFromRunningDB(vdb, &options.DatabaseOptions)
+	err := vcc.getVDBFromRunningDBContainsSandbox(vdb, &options.DatabaseOptions)
 	if err != nil {
 		return err
 	}
