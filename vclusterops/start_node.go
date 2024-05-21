@@ -68,9 +68,8 @@ func VStartNodesOptionsFactory() VStartNodesOptions {
 func (options *VStartNodesOptions) setDefaultValues() {
 	options.DatabaseOptions.setDefaultValues()
 	// set default value to StatePollingTimeout
-	if options.StatePollingTimeout == 0 {
-		options.StatePollingTimeout = util.DefaultStatePollingTimeout
-	}
+	options.StatePollingTimeout = util.DefaultStatePollingTimeout
+	options.Nodes = make(map[string]string)
 }
 
 func (options *VStartNodesOptions) validateParseOptions(logger vlog.Printer) error {
@@ -94,7 +93,6 @@ func (options *VStartNodesOptions) analyzeOptions() (err error) {
 // For example, map[string]string{vnodeName1: host1, vnodeName2: host2} is converted to
 // map[string]string{vnodeName1: 192.168.1.101, vnodeName2: 192.168.1.102}
 func (options *VStartNodesOptions) ParseNodesList(rawNodeMap map[string]string) error {
-	options.Nodes = make(map[string]string)
 	for k, v := range rawNodeMap {
 		ip, err := util.ResolveToOneIP(v, options.IPv6)
 		if err != nil {

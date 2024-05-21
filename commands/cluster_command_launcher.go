@@ -31,7 +31,7 @@ import (
 const defaultLogPath = "/opt/vertica/log/vcluster.log"
 const defaultExecutablePath = "/opt/vertica/bin/vcluster"
 
-const CLIVersion = "1.2.0"
+const CLIVersion = "2.0.0"
 const vclusterLogPathEnv = "VCLUSTER_LOG_PATH"
 const vclusterKeyFileEnv = "VCLUSTER_KEY_FILE"
 const vclusterCertFileEnv = "VCLUSTER_CERT_FILE"
@@ -84,6 +84,9 @@ const (
 	connFlag                    = "conn"
 	connKey                     = "conn"
 	stopNodeFlag                = "stop-hosts"
+	// VER-90436: restart -> start
+	startNodeFlag = "restart"
+	startHostFlag = "start-hosts"
 )
 
 // Flag and key for database replication
@@ -152,13 +155,13 @@ const (
 	listAllNodesSubCmd      = "list_allnodes"
 	startDBSubCmd           = "start_db"
 	dropDBSubCmd            = "drop_db"
-	addSCSubCmd             = "db_add_subcluster"
-	removeSCSubCmd          = "db_remove_subcluster"
+	addSCSubCmd             = "add_subcluster"
+	removeSCSubCmd          = "remove_subcluster"
 	stopSCSubCmd            = "stop_subcluster"
-	addNodeSubCmd           = "db_add_node"
+	addNodeSubCmd           = "add_node"
 	startSCSubCmd           = "start_subcluster"
 	stopNodeCmd             = "stop_node"
-	removeNodeSubCmd        = "db_remove_node"
+	removeNodeSubCmd        = "remove_node"
 	restartNodeSubCmd       = "restart_node"
 	reIPSubCmd              = "re_ip"
 	sandboxSubCmd           = "sandbox_subcluster"

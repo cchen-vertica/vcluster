@@ -49,7 +49,7 @@ The database must be down to change the IP addresses with re_ip. If
 the database is up, you must run restart_node after re_ip for the 
 IP changes to take effect.
 
-The file specified by the re_ip-file option must be a JSON file in the
+The file specified by the re-ip-file option must be a JSON file in the
 following format:
 [  
 	{"from_address": "10.20.30.40", "to_address": "10.20.30.41"},  
@@ -67,11 +67,14 @@ Examples:
   vcluster re_ip --db-name test_db --re-ip-file /data/re_ip_map.json \
     --config /opt/vertica/config/vertica_cluster.yaml
 `,
-		[]string{dbNameFlag, hostsFlag, catalogPathFlag, configParamFlag, configFlag},
+		[]string{dbNameFlag, hostsFlag, ipv6Flag, catalogPathFlag, configParamFlag, configFlag},
 	)
 
 	// local flags
 	newCmd.setLocalFlags(cmd)
+
+	// hidden flags
+	newCmd.setHiddenFlags(cmd)
 
 	// require re-ip-file
 	markFlagsRequired(cmd, []string{"re-ip-file"})
@@ -90,12 +93,24 @@ func (c *CmdReIP) setLocalFlags(cmd *cobra.Command) {
 	)
 }
 
+// setHiddenFlags will set the hidden flags the command has.
+// These hidden flags will not be shown in help and usage of the command, and they will be used internally.
+func (c *CmdReIP) setHiddenFlags(cmd *cobra.Command) {
+	cmd.Flags().BoolVar(
+		&c.reIPOptions.DBRunning,
+		"db-running",
+		false,
+		"",
+	)
+	hideLocalFlags(cmd, []string{"db-running"})
+}
+
 func (c *CmdReIP) Parse(inputArgv []string, logger vlog.Printer) error {
 	c.argv = inputArgv
 	logger.LogArgParse(&c.argv)
 	// Set CheckDBRunning to true so that CLI can check running db for Re_IP
 	// Re-IP should only be used for down DB, checking if db is running
-	c.reIPOptions.CheckDBRunning = true
+	c.reIPOptions.CheckDBRunning = false
 	return c.validateParse(logger)
 }
 

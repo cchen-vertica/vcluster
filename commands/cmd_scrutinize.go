@@ -104,7 +104,7 @@ Examples:
   vcluster scrutinize --db-name test_db --db-user dbadmin \
     --password testpassword --config /opt/vertica/config/vertica_cluster.yaml
 `,
-		[]string{dbNameFlag, hostsFlag, configFlag, catalogPathFlag, passwordFlag},
+		[]string{dbNameFlag, hostsFlag, ipv6Flag, configFlag, catalogPathFlag, passwordFlag},
 	)
 
 	// local flags
@@ -184,6 +184,12 @@ func (c *CmdScrutinize) setLocalFlags(cmd *cobra.Command) {
 		false,
 		"Include information describing all UDX functions, "+
 			"which can be expensive to gather on Eon",
+	)
+	cmd.Flags().BoolVar(
+		&c.sOptions.SkipCollectLibs,
+		"skip-collect-libraries",
+		false,
+		"Skip gathering linked and catalog shared libraries",
 	)
 }
 

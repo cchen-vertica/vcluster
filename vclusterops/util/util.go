@@ -394,6 +394,20 @@ func ValidateUsernameAndPassword(opName string, useHTTPPassword bool, userName s
 	return nil
 }
 
+func ValidateSQLEndpointData(opName string, useDBPassword bool, userName string,
+	password *string, dbName string) error {
+	if userName == "" {
+		return fmt.Errorf("[%s] should always provide a username for local database connection", opName)
+	}
+	if dbName == "" {
+		return fmt.Errorf("[%s] should always provide a database name for local database connection", opName)
+	}
+	if useDBPassword && password == nil {
+		return fmt.Errorf("[%s] should properly set the password when a password is configured", opName)
+	}
+	return nil
+}
+
 const (
 	FileExist    = 0
 	FileNotExist = 1

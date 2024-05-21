@@ -58,26 +58,26 @@ the --is-primary option.
 
 Examples:
   # Add a subcluster with config file
-  vcluster db_add_subcluster --subcluster sc1 \
+  vcluster add_subcluster --subcluster sc1 \
     --config /opt/vertica/config/vertica_cluster.yaml \
     --is-primary --control-set-size 1
 
   # Add a subcluster with user input
-  vcluster db_add_subcluster --subcluster sc1 --db-name test_db \
+  vcluster add_subcluster --subcluster sc1 --db-name test_db \
     --hosts 10.20.30.40,10.20.30.41,10.20.30.42 \
     --is-primary --control-set-size -1
 
   # Add a subcluster and new nodes in the subcluster with config file
-  vcluster db_add_subcluster --subcluster sc1 \
+  vcluster add_subcluster --subcluster sc1 \
     --config /opt/vertica/config/vertica_cluster.yaml \
     --is-primary --control-set-size 1 --new-hosts 10.20.30.43
 
   # Add a subcluster new nodes in the subcluster with user input
-  vcluster db_add_subcluster --subcluster sc1 --db-name test_db \
+  vcluster add_subcluster --subcluster sc1 --db-name test_db \
 	--hosts 10.20.30.40,10.20.30.41,10.20.30.42 \
 	--is-primary --control-set-size -1 --new-hosts 10.20.30.43
 `,
-		[]string{dbNameFlag, configFlag, hostsFlag, eonModeFlag, passwordFlag,
+		[]string{dbNameFlag, configFlag, hostsFlag, ipv6Flag, eonModeFlag, passwordFlag,
 			dataPathFlag, depotPathFlag},
 	)
 

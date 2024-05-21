@@ -54,6 +54,7 @@ type VScrutinizeOptions struct {
 	IncludeRos                  bool
 	IncludeExternalTableDetails bool
 	IncludeUDXDetails           bool
+	SkipCollectLibs             bool
 	LogAgeOldestTime            string
 	LogAgeNewestTime            string
 	LogAgeHours                 int // max log age from input
@@ -376,7 +377,7 @@ func (vcc VClusterCommands) produceScrutinizeInstructions(options *VScrutinizeOp
 
 	// run and stage diagnostic command results -- see NMA for what commands are run
 	stageCommandsOp, err := makeNMAStageCommandsOp(vcc.Log, options.ID, scrutinizeBatchContext,
-		options.Hosts, hostNodeNameMap, hostCatPathMap)
+		options.Hosts, hostNodeNameMap, hostCatPathMap, options.SkipCollectLibs)
 	if err != nil {
 		return nil, err
 	}

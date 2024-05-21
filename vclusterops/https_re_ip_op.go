@@ -37,10 +37,10 @@ func (e *ReIPNoClusterQuorumError) Error() string {
 type httpsReIPOp struct {
 	opBase
 	opHTTPSBase
-	hostToReIP      []string
-	reIPList        map[string]ReIPInfo
-	nodeNamesToReIP []string
-	upHosts         []string
+	hostToReIP          []string
+	reIPList            map[string]ReIPInfo
+	nodeNamesToReIP     []string
+	forStartNodeCommand bool
 }
 
 func makeHTTPSReIPOp(nodeNamesToReIP, hostToReIP []string,
@@ -51,6 +51,7 @@ func makeHTTPSReIPOp(nodeNamesToReIP, hostToReIP []string,
 	op.useHTTPPassword = useHTTPPassword
 	op.nodeNamesToReIP = nodeNamesToReIP
 	op.hostToReIP = hostToReIP
+	op.forStartNodeCommand = true
 
 	if useHTTPPassword {
 		err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
@@ -65,14 +66,29 @@ func makeHTTPSReIPOp(nodeNamesToReIP, hostToReIP []string,
 	return op, nil
 }
 
+func makeHTTPSReIPOpForReIPCommand(hosts []string, reIPList map[string]ReIPInfo,
+	useHTTPPassword bool, userName string, httpsPassword *string) (httpsReIPOp, error) {
+	op, err := makeHTTPSReIPOp(nil, nil, useHTTPPassword, userName, httpsPassword)
+	if err != nil {
+		return op, err
+	}
+	op.forStartNodeCommand = false
+	op.hosts = hosts
+	op.reIPList = reIPList
+	return op, nil
+}
+
 func (op *httpsReIPOp) setupClusterHTTPRequest(hostsToReIP []string) error {
 	// At this point there must be more up nodes than hosts to re-ip.
 	// Failure to meet that requirement would most likely mean that we have lost
 	// quorum and a cluster restart is needed
-	if len(op.upHosts) < len(hostsToReIP) {
+	if len(op.hosts) < len(hostsToReIP) && op.forStartNodeCommand {
 		return &ReIPNoClusterQuorumError{
-			Detail: fmt.Sprintf("[%s] %d up nodes are not enough for re-ip", op.name, len(op.upHosts)),
+			Detail: fmt.Sprintf("[%s] %d up nodes are not enough for re-ip", op.name, len(op.hosts)),
 		}
+	}
+	if len(hostsToReIP) == 0 && !op.forStartNodeCommand {
+		hostsToReIP = op.hosts
 	}
 	for i, host := range hostsToReIP {
 		httpRequest := hostHTTPRequest{}
@@ -91,34 +107,47 @@ func (op *httpsReIPOp) setupClusterHTTPRequest(hostsToReIP []string) error {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
 		}
-		op.clusterHTTPRequest.RequestCollection[op.upHosts[i]] = httpRequest
+		op.clusterHTTPRequest.RequestCollection[op.hosts[i]] = httpRequest
 	}
 
 	return nil
 }
 
 func (op *httpsReIPOp) prepare(execContext *opEngineExecContext) error {
-	op.reIPList = make(map[string]ReIPInfo)
-	// update reIPList from input node names and execContext.networkProfiles
-	for i := 0; i < len(op.nodeNamesToReIP); i++ {
-		nodeNameToReIP := op.nodeNamesToReIP[i]
-		targetAddress := op.hostToReIP[i]
-		profile, ok := execContext.networkProfiles[targetAddress]
-		if !ok {
-			return fmt.Errorf("[%s] unable to find network profile for address %s", op.name, targetAddress)
+	if len(op.reIPList) == 0 {
+		op.reIPList = make(map[string]ReIPInfo)
+		// update reIPList from input node names and execContext.networkProfiles
+		for i := 0; i < len(op.nodeNamesToReIP); i++ {
+			nodeNameToReIP := op.nodeNamesToReIP[i]
+			targetAddress := op.hostToReIP[i]
+			profile, ok := execContext.networkProfiles[targetAddress]
+			if !ok {
+				return fmt.Errorf("[%s] unable to find network profile for address %s", op.name, targetAddress)
+			}
+			info := ReIPInfo{
+				NodeName:               nodeNameToReIP,
+				TargetAddress:          targetAddress,
+				TargetControlAddress:   profile.Address,
+				TargetControlBroadcast: profile.Broadcast,
+			}
+			op.reIPList[nodeNameToReIP] = info
 		}
-		info := ReIPInfo{
-			NodeName:               nodeNameToReIP,
-			TargetAddress:          targetAddress,
-			TargetControlAddress:   profile.Address,
-			TargetControlBroadcast: profile.Broadcast,
+	} else if len(op.hosts) > 0 {
+		// update re-ip list for re-ip command
+		reIPList := []ReIPInfo{op.reIPList[op.hosts[0]]}
+		err := updateReIPList(reIPList, execContext)
+		if err != nil {
+			return fmt.Errorf("[%s] error updating reIP list: %w", op.name, err)
 		}
-		op.reIPList[nodeNameToReIP] = info
+		op.reIPList[op.hosts[0]] = reIPList[0]
 	}
 
+	// when there isn't any incoming hosts,
 	// use up hosts to execute the HTTP re-IP endpoint
-	op.upHosts = execContext.upHosts
-	execContext.dispatcher.setup(op.upHosts)
+	if len(op.hosts) == 0 {
+		op.hosts = execContext.upHosts
+	}
+	execContext.dispatcher.setup(op.hosts)
 	return op.setupClusterHTTPRequest(op.nodeNamesToReIP)
 }
 

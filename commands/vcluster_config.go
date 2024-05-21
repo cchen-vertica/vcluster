@@ -49,6 +49,7 @@ type DatabaseConfig struct {
 	IsEon                   bool          `yaml:"eonMode" mapstructure:"eonMode"`
 	CommunalStorageLocation string        `yaml:"communalStorageLocation" mapstructure:"communalStorageLocation"`
 	Ipv6                    bool          `yaml:"ipv6" mapstructure:"ipv6"`
+	FirstStartAfterRevive   bool          `yaml:"firstStartAfterRevive" mapstructure:"firstStartAfterRevive"`
 }
 
 // NodeConfig contains node information in the database
@@ -255,6 +256,7 @@ func readVDBToDBConfig(vdb *vclusterops.VCoordinationDatabase) (DatabaseConfig, 
 	dbConfig.CommunalStorageLocation = vdb.CommunalStorageLocation
 	dbConfig.Ipv6 = vdb.Ipv6
 	dbConfig.Name = vdb.Name
+	dbConfig.FirstStartAfterRevive = vdb.FirstStartAfterRevive
 
 	return dbConfig, nil
 }

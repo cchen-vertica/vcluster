@@ -62,7 +62,7 @@ Examples:
   vcluster list_allnodes --password testpassword \
     --config /opt/vertica/config/vertica_cluster.yaml
 `,
-		[]string{dbNameFlag, hostsFlag, passwordFlag, catalogPathFlag, configFlag, outputFileFlag},
+		[]string{dbNameFlag, hostsFlag, passwordFlag, ipv6Flag, catalogPathFlag, configFlag, outputFileFlag},
 	)
 
 	return cmd

@@ -36,7 +36,10 @@ var (
 	once         sync.Once
 )
 
-// return a singleton instance of the AdapterPool
+// return a new instance of an adapterPool. The adapterPool cannot be shared
+// between Go routines. Otherwise, they will clobber each other state causing
+// HTTP request errors. It is the callers responsibility to ensure it doesn't
+// get shared.
 func getPoolInstance(logger vlog.Printer) adapterPool {
 	/* if once.Do(f) is called multiple times,
 	 * only the first call will invoke f,

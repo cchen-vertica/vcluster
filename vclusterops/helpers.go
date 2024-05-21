@@ -109,6 +109,7 @@ type nodeStateInfo struct {
 	Name             string   `json:"name"`
 	Sandbox          string   `json:"sandbox_name"`
 	Version          string   `json:"build_info"`
+	IsControlNode    bool     `json:"is_control_node"`
 }
 
 func (node *nodeStateInfo) asNodeInfo() (n NodeInfo, err error) {
@@ -255,6 +256,16 @@ func getInitiator(hosts []string) string {
 	return hosts[0]
 }
 
+func getInitiatorInSandbox(targetSandbox string, hosts []string,
+	upHostsToSandboxes map[string]string) (string, error) {
+	for _, host := range hosts {
+		if sandbox, ok := upHostsToSandboxes[host]; ok && sandbox == targetSandbox {
+			return host, nil
+		}
+	}
+	return "", fmt.Errorf("no hosts among %v are both UP and within sandbox %v", hosts, targetSandbox)
+}
+
 // getInitiator will pick an initiator from the up host list to execute https calls
 // such that the initiator is also among the user provided host list
 func getInitiatorFromUpHosts(upHosts, userProvidedHosts []string) string {
@@ -285,4 +296,38 @@ func validateHostMaps(hosts []string, maps ...map[string]string) error {
 		}
 	}
 	return allErrors
+}
+
+// updateReIPList is used for the vcluster CLI to update node names
+func updateReIPList(reIPList []ReIPInfo, execContext *opEngineExecContext) error {
+	hostNodeMap := execContext.nmaVDatabase.HostNodeMap
+
+	for i := 0; i < len(reIPList); i++ {
+		info := reIPList[i]
+		// update node name if not given
+		if info.NodeName == "" {
+			vnode, ok := hostNodeMap[info.NodeAddress]
+			if !ok {
+				return fmt.Errorf("the provided IP %s cannot be found from the database catalog",
+					info.NodeAddress)
+			}
+			info.NodeName = vnode.Name
+		}
+		// update control address if not given
+		if info.TargetControlAddress == "" {
+			info.TargetControlAddress = info.TargetAddress
+		}
+		// update control broadcast if not given
+		if info.TargetControlBroadcast == "" {
+			profile, ok := execContext.networkProfiles[info.TargetAddress]
+			if !ok {
+				return fmt.Errorf("unable to find network profile for address %s", info.TargetAddress)
+			}
+			info.TargetControlBroadcast = profile.Broadcast
+		}
+
+		reIPList[i] = info
+	}
+
+	return nil
 }

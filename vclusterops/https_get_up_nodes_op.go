@@ -33,6 +33,7 @@ const (
 	StopSubclusterCmd
 	InstallPackageCmd
 	UnsandboxCmd
+	ManageConnectionDrainingCmd
 )
 
 type CommandType int
@@ -218,7 +219,9 @@ func (op *httpsGetUpNodesOp) processResult(execContext *opEngineExecContext) err
 
 // Return true if all the results need to be scanned to figure out UP hosts
 func isCompleteScanRequired(cmdType CommandType) bool {
-	return cmdType == SandboxCmd || cmdType == StopDBCmd || cmdType == UnsandboxCmd || cmdType == StopSubclusterCmd
+	return cmdType == SandboxCmd || cmdType == StopDBCmd ||
+		cmdType == UnsandboxCmd || cmdType == StopSubclusterCmd ||
+		cmdType == ManageConnectionDrainingCmd
 }
 
 func (op *httpsGetUpNodesOp) finalize(_ *opEngineExecContext) error {
@@ -306,7 +309,6 @@ func (op *httpsGetUpNodesOp) validateHosts(nodesStates nodesStateInfo) error {
 
 func (op *httpsGetUpNodesOp) collectUpHosts(nodesStates nodesStateInfo, host string, upHosts mapset.Set[string],
 	upScInfo, sandboxInfo map[string]string, upScNodes, scNodes mapset.Set[NodeInfo]) (err error) {
-	upMainNodeFound := false
 	foundSC := false
 	for _, node := range nodesStates.NodeList {
 		if node.Database != op.DBName {
@@ -319,12 +321,9 @@ func (op *httpsGetUpNodesOp) collectUpHosts(nodesStates nodesStateInfo, host str
 		if node.State == util.NodeUpState {
 			upHosts.Add(node.Address)
 			upScInfo[node.Address] = node.Subcluster
-			if op.cmdType == StopDBCmd {
-				if node.Sandbox != util.MainClusterSandbox || !upMainNodeFound {
-					sandboxInfo[node.Address] = node.Sandbox
-					// We still need one main cluster UP node, when there are sandboxes
-					upMainNodeFound = true
-				}
+			if op.cmdType == ManageConnectionDrainingCmd ||
+				op.cmdType == StopDBCmd {
+				sandboxInfo[node.Address] = node.Sandbox
 			}
 		}
 		if op.scName == node.Subcluster {

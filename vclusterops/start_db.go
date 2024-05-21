@@ -38,6 +38,9 @@ type VStartDatabaseOptions struct {
 	StartUpConf string
 	// whether the provided hosts are in a sandbox
 	HostsInSandbox bool
+
+	// whether the first time to start the database after revive
+	FirstStartAfterRevive bool
 }
 
 func VStartDatabaseOptionsFactory() VStartDatabaseOptions {
@@ -52,9 +55,7 @@ func VStartDatabaseOptionsFactory() VStartDatabaseOptions {
 func (options *VStartDatabaseOptions) setDefaultValues() {
 	options.DatabaseOptions.setDefaultValues()
 	// set default value to StatePollingTimeout
-	if options.StatePollingTimeout == 0 {
-		options.StatePollingTimeout = util.DefaultStatePollingTimeout
-	}
+	options.StatePollingTimeout = util.DefaultStatePollingTimeout
 }
 
 func (options *VStartDatabaseOptions) validateRequiredOptions(logger vlog.Printer) error {
@@ -259,7 +260,7 @@ func (vcc VClusterCommands) produceStartDBPreCheck(options *VStartDatabaseOption
 
 	// find latest catalog to use for removal of nodes not in the catalog
 	if trimHostList {
-		nmaReadCatalogEditorOp, err := makeNMAReadCatalogEditorOp(vdb)
+		nmaReadCatalogEditorOp, err := makeNMAReadCatalogEditorOpForStartDB(vdb, options.FirstStartAfterRevive)
 		if err != nil {
 			return instructions, err
 		}
@@ -284,7 +285,7 @@ func (vcc VClusterCommands) produceStartDBInstructions(options *VStartDatabaseOp
 	var instructions []clusterOp
 
 	// vdb here should contain only primary nodes
-	nmaReadCatalogEditorOp, err := makeNMAReadCatalogEditorOp(vdb)
+	nmaReadCatalogEditorOp, err := makeNMAReadCatalogEditorOpForStartDB(vdb, options.FirstStartAfterRevive)
 	if err != nil {
 		return instructions, err
 	}

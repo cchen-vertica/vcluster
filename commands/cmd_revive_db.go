@@ -79,7 +79,7 @@ Examples:
     --ignore-cluster-lease --restore-point-archive db --restore-point-index 1
 
 `,
-		[]string{dbNameFlag, hostsFlag, communalStorageLocationFlag, configFlag, outputFileFlag, configParamFlag},
+		[]string{dbNameFlag, hostsFlag, ipv6Flag, communalStorageLocationFlag, configFlag, outputFileFlag, configParamFlag},
 	)
 
 	// local flags
@@ -180,6 +180,7 @@ func (c *CmdReviveDB) Run(vcc vclusterops.ClusterCommands) error {
 	}
 
 	// write db info to vcluster config file
+	vdb.FirstStartAfterRevive = true
 	err = writeConfig(vdb)
 	if err != nil {
 		vcc.PrintWarning("fail to write config file, details: %s", err)

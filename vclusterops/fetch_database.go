@@ -24,7 +24,8 @@ import (
 
 type VFetchCoordinationDatabaseOptions struct {
 	DatabaseOptions
-	Overwrite bool // overwrite existing config file at the same location
+	Overwrite   bool // overwrite existing config file at the same location
+	AfterRevive bool // whether recover config right after revive_db
 
 	// hidden option
 	readOnly bool // this should be only used if we don't want to update the config file

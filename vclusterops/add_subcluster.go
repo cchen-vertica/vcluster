@@ -71,7 +71,7 @@ func (options *VAddSubclusterOptions) setDefaultValues() {
 }
 
 func (options *VAddSubclusterOptions) validateRequiredOptions(logger vlog.Printer) error {
-	err := options.validateBaseOptions("db_add_subcluster", logger)
+	err := options.validateBaseOptions("add_subcluster", logger)
 	if err != nil {
 		return err
 	}
@@ -232,7 +232,7 @@ func (vcc *VClusterCommands) produceAddSubclusterInstructions(options *VAddSubcl
 		return instructions, err
 	}
 
-	// db_add_subcluster only works with Eon database
+	// add_subcluster only works with Eon database
 	if !vdb.IsEon {
 		// info from running db confirms that the db is not Eon
 		return instructions, fmt.Errorf("add subcluster is only supported in Eon mode")

@@ -79,7 +79,7 @@ func (o *VAddNodeOptions) validateExtraOptions() error {
 
 func (o *VAddNodeOptions) validateParseOptions(logger vlog.Printer) error {
 	// batch 1: validate required parameters
-	err := o.validateBaseOptions("db_add_node", logger)
+	err := o.validateBaseOptions("add_node", logger)
 	if err != nil {
 		return err
 	}

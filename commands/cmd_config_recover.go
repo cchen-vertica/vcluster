@@ -83,6 +83,12 @@ func (c *CmdConfigRecover) setLocalFlags(cmd *cobra.Command) {
 		false,
 		"overwrite the existing config file",
 	)
+	cmd.Flags().BoolVar(
+		&c.recoverConfigOptions.AfterRevive,
+		"after-revive",
+		false,
+		"whether recover config file right after reviving a database",
+	)
 }
 
 func (c *CmdConfigRecover) Parse(inputArgv []string, logger vlog.Printer) error {
@@ -110,6 +116,7 @@ func (c *CmdConfigRecover) Run(vcc vclusterops.ClusterCommands) error {
 		return err
 	}
 	// write db info to vcluster config file
+	vdb.FirstStartAfterRevive = c.recoverConfigOptions.AfterRevive
 	err = writeConfig(&vdb)
 	if err != nil {
 		return fmt.Errorf("fail to write config file, details: %s", err)

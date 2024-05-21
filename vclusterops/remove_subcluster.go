@@ -45,7 +45,7 @@ func (o *VRemoveScOptions) setDefaultValues() {
 }
 
 func (o *VRemoveScOptions) validateRequiredOptions(logger vlog.Printer) error {
-	err := o.validateBaseOptions("db_remove_subcluster", logger)
+	err := o.validateBaseOptions("remove_subcluster", logger)
 	if err != nil {
 		return err
 	}
@@ -130,13 +130,13 @@ func (vcc VClusterCommands) VRemoveSubcluster(removeScOpt *VRemoveScOptions) (VC
 	}
 
 	// pre-check: should not remove the default subcluster
-	vcc.PrintInfo("Performing db_remove_subcluster pre-checks")
+	vcc.PrintInfo("Performing remove_subcluster pre-checks")
 	hostsToRemove, err := vcc.removeScPreCheck(&vdb, removeScOpt)
 	if err != nil {
 		return vdb, err
 	}
 
-	// proceed to run db_remove_node only if
+	// proceed to run remove_node only if
 	// the number of nodes to remove is greater than zero
 	var needRemoveNodes bool
 	vcc.Log.V(1).Info("Nodes to be removed: %+v", hostsToRemove)
@@ -154,6 +154,7 @@ func (vcc VClusterCommands) VRemoveSubcluster(removeScOpt *VRemoveScOptions) (VC
 		removeNodeOpt.DatabaseOptions = removeScOpt.DatabaseOptions
 		removeNodeOpt.HostsToRemove = hostsToRemove
 		removeNodeOpt.ForceDelete = removeScOpt.ForceDelete
+		removeNodeOpt.IsSubcluster = true
 
 		vcc.Log.PrintInfo("Removing nodes %q from subcluster %s",
 			hostsToRemove, removeScOpt.SubclusterToRemove)
@@ -182,7 +183,7 @@ func (e *removeDefaultSubclusterError) Error() string {
 }
 
 // removeScPreCheck will build a list of instructions to perform
-// db_remove_subcluster pre-checks
+// remove_subcluster pre-checks
 //
 // The generated instructions will later perform the following operations necessary
 // for a successful remove_node:
@@ -190,7 +191,7 @@ func (e *removeDefaultSubclusterError) Error() string {
 //   - Get the subcluster info (check if the target sc exists and if it is the default sc)
 func (vcc VClusterCommands) removeScPreCheck(vdb *VCoordinationDatabase, options *VRemoveScOptions) ([]string, error) {
 	var hostsToRemove []string
-	const preCheckErrMsg = "while performing db_remove_subcluster pre-checks"
+	const preCheckErrMsg = "while performing remove_subcluster pre-checks"
 
 	// get cluster and nodes info
 	err := vcc.getVDBFromRunningDB(vdb, &options.DatabaseOptions)
@@ -198,7 +199,7 @@ func (vcc VClusterCommands) removeScPreCheck(vdb *VCoordinationDatabase, options
 		return hostsToRemove, err
 	}
 
-	// db_remove_subcluster only works with Eon database
+	// remove_subcluster only works with Eon database
 	if !vdb.IsEon {
 		// info from running db confirms that the db is not Eon
 		return hostsToRemove, fmt.Errorf(`cannot remove subcluster from an enterprise database '%s'`,

@@ -89,16 +89,17 @@ const (
 	commandDropDB            = "drop_db"
 	commandStopDB            = "stop_db"
 	commandStartDB           = "start_db"
-	commandAddNode           = "db_add_node"
-	commandRemoveNode        = "db_remove_node"
-	commandAddCluster        = "db_add_subcluster"
-	commandRemoveCluster     = "db_remove_subcluster"
+	commandAddNode           = "add_node"
+	commandRemoveNode        = "remove_node"
+	commandAddCluster        = "add_subcluster"
+	commandRemoveCluster     = "remove_subcluster"
 	commandStopCluster       = "stop_subcluster"
 	commandSandboxSC         = "sandbox_subcluster"
 	commandUnsandboxSC       = "unsandbox_subcluster"
 	commandShowRestorePoints = "show_restore_points"
 	commandInstallPackages   = "install_packages"
 	commandConfigRecover     = "manage_config_recover"
+	commandManageConnections = "manage_connections"
 	commandReplicationStart  = "replication_start"
 	commandFetchNodesDetails = "fetch_nodes_details"
 )
@@ -262,6 +263,19 @@ func (opt *DatabaseOptions) setUsePassword(log vlog.Printer) error {
 		}
 	}
 
+	return nil
+}
+
+func (opt *DatabaseOptions) setUsePasswordForLocalDBConnection(log vlog.Printer) error {
+	opt.usePassword = false
+	if opt.Password != nil {
+		opt.usePassword = true
+	}
+	// username is always required when local db connection is made
+	err := opt.validateUserName(log)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

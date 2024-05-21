@@ -99,8 +99,9 @@ func (op *httpsGetNodesInfoOp) shouldUseResponse(host string, nodesStates *nodes
 	if responseSandbox != "" && !op.allowUseSandboxResponse {
 		return false
 	}
+
 	// continue to parse next response if a response from a different sandbox is expected
-	if op.sandbox != AnySandbox && responseSandbox != op.sandbox {
+	if op.sandbox != AnySandbox && responseSandbox != op.sandbox && op.sandbox != util.MainClusterSandbox {
 		return false
 	}
 	return true
@@ -146,6 +147,7 @@ func (op *httpsGetNodesInfoOp) processResult(_ *opEngineExecContext) error {
 				vNode.State = node.State
 				vNode.Subcluster = node.Subcluster
 				vNode.Sandbox = node.Sandbox
+				vNode.IsControlNode = node.IsControlNode
 				if node.IsPrimary && node.State == util.NodeUpState {
 					op.vdb.PrimaryUpNodes = append(op.vdb.PrimaryUpNodes, node.Address)
 				}

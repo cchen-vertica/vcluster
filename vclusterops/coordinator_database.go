@@ -55,7 +55,8 @@ type VCoordinationDatabase struct {
 	// more to add when useful
 	Ipv6 bool
 
-	PrimaryUpNodes []string
+	PrimaryUpNodes        []string
+	FirstStartAfterRevive bool
 }
 
 type vHostNodeMap map[string]*VCoordinationNode
@@ -331,8 +332,9 @@ type VCoordinationNode struct {
 	// empty string if it is not an eon db
 	Subcluster string
 	// empty string if it is not in a sandbox
-	Sandbox string
-	Version string
+	Sandbox       string
+	Version       string
+	IsControlNode bool
 }
 
 func makeVCoordinationNode() VCoordinationNode {

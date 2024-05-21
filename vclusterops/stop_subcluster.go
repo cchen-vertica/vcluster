@@ -109,6 +109,7 @@ func (options *VStopSubclusterOptions) validateAnalyzeOptions(log vlog.Printer) 
 	return options.analyzeOptions()
 }
 
+//nolint:dupl
 func (vcc VClusterCommands) VStopSubcluster(options *VStopSubclusterOptions) error {
 	/*
 	 *   - Validate Options
