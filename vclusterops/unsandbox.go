@@ -32,6 +32,11 @@ type VUnsandboxOptions struct {
 	RestartSC bool
 	// if any node in the target subcluster is up. This is for internal use only.
 	hasUpNodeInSC bool
+	// The expected node names with their IPs in the subcluster, the user of vclusterOps need
+	// to make sure the provided values are correct.
+	NodeNameAddressMap map[string]string
+	// A primary up host in the main cluster
+	PrimaryUpHost string
 }
 
 func VUnsandboxOptionsFactory() VUnsandboxOptions {
@@ -271,6 +276,16 @@ func (vcc VClusterCommands) VUnsandbox(options *VUnsandboxOptions) error {
 
 // runCommand will produce instructions and run them
 func (options *VUnsandboxOptions) runCommand(vcc VClusterCommands) error {
+	// if the users want to do re-ip before unsandboxing, we require them
+	// to provide some node information
+	if options.PrimaryUpHost != "" && len(options.NodeNameAddressMap) > 0 {
+		err := vcc.reIP(&options.DatabaseOptions, options.SCName, options.PrimaryUpHost,
+			options.NodeNameAddressMap)
+		if err != nil {
+			return err
+		}
+	}
+
 	vdb := makeVCoordinationDatabase()
 	err := vcc.unsandboxPreCheck(&vdb, options)
 	if err != nil {

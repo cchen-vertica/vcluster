@@ -28,8 +28,8 @@ type VSandboxOptions struct {
 	SCName      string
 	SCHosts     []string
 	SCRawHosts  []string
-	// The expected node names with their IPs, the user of vclusterOps need to make sure
-	// the provided values are correct.
+	// The expected node names with their IPs in the subcluster, the user of vclusterOps need
+	// to make sure the provided values are correct.
 	NodeNameAddressMap map[string]string
 	// A primary up host in the target sandbox
 	SandboxPrimaryUpHost string
@@ -173,7 +173,8 @@ func (options *VSandboxOptions) runCommand(vcc VClusterCommands) error {
 	// if the users want to do re-ip before sandboxing, we require them
 	// to provide some node information
 	if options.SandboxPrimaryUpHost != "" && len(options.NodeNameAddressMap) > 0 {
-		err := vcc.reIP(options)
+		err := vcc.reIP(&options.DatabaseOptions, options.SCName, options.SandboxPrimaryUpHost,
+			options.NodeNameAddressMap)
 		if err != nil {
 			return err
 		}
@@ -210,26 +211,27 @@ func runSandboxCmd(vcc VClusterCommands, i sandboxInterface) error {
 	return i.runCommand(vcc)
 }
 
-func (vcc *VClusterCommands) reIP(options *VSandboxOptions) error {
+func (vcc *VClusterCommands) reIP(options *DatabaseOptions, scName, primaryUpHost string,
+	nodeNameAddressMap map[string]string) error {
 	reIPList := []ReIPInfo{}
 	reIPHosts := []string{}
 	vdb := makeVCoordinationDatabase()
-	initiator := []string{options.SandboxPrimaryUpHost}
 
-	hosts := options.Hosts
-	// only use the up node in the sandbox to retrieve nodes' info, then we can get
-	// the latest node IPs in the sandbox
+	backupHosts := options.Hosts
+	// only use one up node in the sandbox/main-cluster to retrieve nodes' info,
+	// then we can get the latest node IPs in the sandbox/main-cluster
+	initiator := []string{primaryUpHost}
 	options.Hosts = initiator
-	err := vcc.getVDBFromRunningDBContainsSandbox(&vdb, &options.DatabaseOptions)
+	err := vcc.getVDBFromRunningDBContainsSandbox(&vdb, options)
 	if err != nil {
-		return fmt.Errorf("host %q in sandbox %q is not up: %w", options.SandboxPrimaryUpHost, options.SCName, err)
+		return fmt.Errorf("host %q in database is not available: %w", primaryUpHost, err)
 	}
-	// restore the options.Hosts for later creating sandbox instructions
-	options.Hosts = hosts
+	// restore the options.Hosts for later creating sandbox/unsandbox instructions
+	options.Hosts = backupHosts
 
 	// if the current node IPs doesn't match the expected ones, we need to do re-ip
 	for _, vnode := range vdb.HostNodeMap {
-		address, ok := options.NodeNameAddressMap[vnode.Name]
+		address, ok := nodeNameAddressMap[vnode.Name]
 		if ok && address != vnode.Address {
 			reIPList = append(reIPList, ReIPInfo{NodeName: vnode.Name, TargetAddress: address})
 			reIPHosts = append(reIPHosts, address)
@@ -262,7 +264,7 @@ func (vcc *VClusterCommands) reIP(options *VSandboxOptions) error {
 		clusterOpEngine := makeClusterOpEngine(instructions, &certs)
 		err = clusterOpEngine.run(vcc.Log)
 		if err != nil {
-			return fmt.Errorf("failed to re-ip nodes of subcluster %q: %w", options.SCName, err)
+			return fmt.Errorf("failed to re-ip nodes of subcluster %q: %w", scName, err)
 		}
 	}
 	return nil
