@@ -222,7 +222,7 @@ func (vcc *VClusterCommands) reIP(options *VSandboxOptions) error {
 	options.Hosts = initiator
 	err := vcc.getVDBFromRunningDB(&vdb, &options.DatabaseOptions)
 	if err != nil {
-		return fmt.Errorf("host %q in sandbox %q is not up", options.SandboxPrimaryUpHost, options.SCName)
+		return fmt.Errorf("host %q in sandbox %q is not up: %w", options.SandboxPrimaryUpHost, options.SCName, err)
 	}
 	// restore the options.Hosts for later creating sandbox instructions
 	options.Hosts = hosts
