@@ -220,7 +220,7 @@ func (vcc *VClusterCommands) reIP(options *VSandboxOptions) error {
 	// only use the up node in the sandbox to retrieve nodes' info, then we can get
 	// the latest node IPs in the sandbox
 	options.Hosts = initiator
-	err := vcc.getVDBFromRunningDB(&vdb, &options.DatabaseOptions)
+	err := vcc.getVDBFromRunningDBContainsSandbox(&vdb, &options.DatabaseOptions)
 	if err != nil {
 		return fmt.Errorf("host %q in sandbox %q is not up: %w", options.SandboxPrimaryUpHost, options.SCName, err)
 	}
