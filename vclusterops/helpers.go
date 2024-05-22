@@ -303,37 +303,3 @@ func validateHostMaps(hosts []string, maps ...map[string]string) error {
 	}
 	return allErrors
 }
-
-// updateReIPList is used for the vcluster CLI to update node names
-func updateReIPList(reIPList []ReIPInfo, execContext *opEngineExecContext) error {
-	hostNodeMap := execContext.nmaVDatabase.HostNodeMap
-
-	for i := 0; i < len(reIPList); i++ {
-		info := reIPList[i]
-		// update node name if not given
-		if info.NodeName == "" {
-			vnode, ok := hostNodeMap[info.NodeAddress]
-			if !ok {
-				return fmt.Errorf("the provided IP %s cannot be found from the database catalog",
-					info.NodeAddress)
-			}
-			info.NodeName = vnode.Name
-		}
-		// update control address if not given
-		if info.TargetControlAddress == "" {
-			info.TargetControlAddress = info.TargetAddress
-		}
-		// update control broadcast if not given
-		if info.TargetControlBroadcast == "" {
-			profile, ok := execContext.networkProfiles[info.TargetAddress]
-			if !ok {
-				return fmt.Errorf("unable to find network profile for address %s", info.TargetAddress)
-			}
-			info.TargetControlBroadcast = profile.Broadcast
-		}
-
-		reIPList[i] = info
-	}
-
-	return nil
-}

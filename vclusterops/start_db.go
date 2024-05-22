@@ -319,16 +319,9 @@ func (vcc VClusterCommands) produceStartDBInstructions(options *VStartDatabaseOp
 		return instructions, err
 	}
 
-	httpsReloadSpreadOp, err := makeHTTPSReloadSpreadOpWithInitiator([]string{options.Hosts[0]},
-		options.usePassword, options.UserName, options.Password)
-	if err != nil {
-		return instructions, err
-	}
-
 	instructions = append(instructions,
 		&nmaStartNewNodesOp,
 		&httpsPollNodeStateOp,
-		&httpsReloadSpreadOp,
 	)
 
 	if options.IsEon {

@@ -73,9 +73,6 @@ Examples:
 	// local flags
 	newCmd.setLocalFlags(cmd)
 
-	// hidden flags
-	newCmd.setHiddenFlags(cmd)
-
 	// require re-ip-file
 	markFlagsRequired(cmd, []string{"re-ip-file"})
 	markFlagsFileName(cmd, map[string][]string{"re-ip-file": {"json"}})
@@ -93,24 +90,12 @@ func (c *CmdReIP) setLocalFlags(cmd *cobra.Command) {
 	)
 }
 
-// setHiddenFlags will set the hidden flags the command has.
-// These hidden flags will not be shown in help and usage of the command, and they will be used internally.
-func (c *CmdReIP) setHiddenFlags(cmd *cobra.Command) {
-	cmd.Flags().BoolVar(
-		&c.reIPOptions.DBRunning,
-		"db-running",
-		false,
-		"",
-	)
-	hideLocalFlags(cmd, []string{"db-running"})
-}
-
 func (c *CmdReIP) Parse(inputArgv []string, logger vlog.Printer) error {
 	c.argv = inputArgv
 	logger.LogArgParse(&c.argv)
 	// Set CheckDBRunning to true so that CLI can check running db for Re_IP
 	// Re-IP should only be used for down DB, checking if db is running
-	c.reIPOptions.CheckDBRunning = false
+	c.reIPOptions.CheckDBRunning = true
 	return c.validateParse(logger)
 }
 

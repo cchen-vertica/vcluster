@@ -66,15 +66,14 @@ func makeHTTPSReIPOp(nodeNamesToReIP, hostToReIP []string,
 	return op, nil
 }
 
-func makeHTTPSReIPOpForReIPCommand(hosts []string, reIPList map[string]ReIPInfo,
+func makeHTTPSReIPOpWithHosts(hosts, nodeNamesToReIP, hostToReIP []string,
 	useHTTPPassword bool, userName string, httpsPassword *string) (httpsReIPOp, error) {
-	op, err := makeHTTPSReIPOp(nil, nil, useHTTPPassword, userName, httpsPassword)
+	op, err := makeHTTPSReIPOp(nodeNamesToReIP, hostToReIP, useHTTPPassword, userName, httpsPassword)
 	if err != nil {
 		return op, err
 	}
 	op.forStartNodeCommand = false
 	op.hosts = hosts
-	op.reIPList = reIPList
 	return op, nil
 }
 
@@ -86,9 +85,6 @@ func (op *httpsReIPOp) setupClusterHTTPRequest(hostsToReIP []string) error {
 		return &ReIPNoClusterQuorumError{
 			Detail: fmt.Sprintf("[%s] %d up nodes are not enough for re-ip", op.name, len(op.hosts)),
 		}
-	}
-	if len(hostsToReIP) == 0 && !op.forStartNodeCommand {
-		hostsToReIP = op.hosts
 	}
 	for i, host := range hostsToReIP {
 		httpRequest := hostHTTPRequest{}
@@ -114,32 +110,22 @@ func (op *httpsReIPOp) setupClusterHTTPRequest(hostsToReIP []string) error {
 }
 
 func (op *httpsReIPOp) prepare(execContext *opEngineExecContext) error {
-	if len(op.reIPList) == 0 {
-		op.reIPList = make(map[string]ReIPInfo)
-		// update reIPList from input node names and execContext.networkProfiles
-		for i := 0; i < len(op.nodeNamesToReIP); i++ {
-			nodeNameToReIP := op.nodeNamesToReIP[i]
-			targetAddress := op.hostToReIP[i]
-			profile, ok := execContext.networkProfiles[targetAddress]
-			if !ok {
-				return fmt.Errorf("[%s] unable to find network profile for address %s", op.name, targetAddress)
-			}
-			info := ReIPInfo{
-				NodeName:               nodeNameToReIP,
-				TargetAddress:          targetAddress,
-				TargetControlAddress:   profile.Address,
-				TargetControlBroadcast: profile.Broadcast,
-			}
-			op.reIPList[nodeNameToReIP] = info
+	op.reIPList = make(map[string]ReIPInfo)
+	// update reIPList from input node names and execContext.networkProfiles
+	for i := 0; i < len(op.nodeNamesToReIP); i++ {
+		nodeNameToReIP := op.nodeNamesToReIP[i]
+		targetAddress := op.hostToReIP[i]
+		profile, ok := execContext.networkProfiles[targetAddress]
+		if !ok {
+			return fmt.Errorf("[%s] unable to find network profile for address %s", op.name, targetAddress)
 		}
-	} else if len(op.hosts) > 0 {
-		// update re-ip list for re-ip command
-		reIPList := []ReIPInfo{op.reIPList[op.hosts[0]]}
-		err := updateReIPList(reIPList, execContext)
-		if err != nil {
-			return fmt.Errorf("[%s] error updating reIP list: %w", op.name, err)
+		info := ReIPInfo{
+			NodeName:               nodeNameToReIP,
+			TargetAddress:          targetAddress,
+			TargetControlAddress:   profile.Address,
+			TargetControlBroadcast: profile.Broadcast,
 		}
-		op.reIPList[op.hosts[0]] = reIPList[0]
+		op.reIPList[nodeNameToReIP] = info
 	}
 
 	// when there isn't any incoming hosts,

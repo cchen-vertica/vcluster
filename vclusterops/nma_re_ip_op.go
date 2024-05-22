@@ -90,6 +90,40 @@ func (op *nmaReIPOp) setupClusterHTTPRequest(hosts []string) error {
 	return nil
 }
 
+// updateReIPList is used for the vcluster CLI to update node names
+func (op *nmaReIPOp) updateReIPList(execContext *opEngineExecContext) error {
+	hostNodeMap := execContext.nmaVDatabase.HostNodeMap
+
+	for i := 0; i < len(op.reIPList); i++ {
+		info := op.reIPList[i]
+		// update node name if not given
+		if info.NodeName == "" {
+			vnode, ok := hostNodeMap[info.NodeAddress]
+			if !ok {
+				return fmt.Errorf("the provided IP %s cannot be found from the database catalog",
+					info.NodeAddress)
+			}
+			info.NodeName = vnode.Name
+		}
+		// update control address if not given
+		if info.TargetControlAddress == "" {
+			info.TargetControlAddress = info.TargetAddress
+		}
+		// update control broadcast if not given
+		if info.TargetControlBroadcast == "" {
+			profile, ok := execContext.networkProfiles[info.TargetAddress]
+			if !ok {
+				return fmt.Errorf("[%s] unable to find network profile for address %s", op.name, info.TargetAddress)
+			}
+			info.TargetControlBroadcast = profile.Broadcast
+		}
+
+		op.reIPList[i] = info
+	}
+
+	return nil
+}
+
 // trimReIPList removes nodes, based on catalog editor info,
 // which are not among the nodes with latest catalog
 func (op *nmaReIPOp) trimReIPList(execContext *opEngineExecContext) error {
@@ -188,7 +222,7 @@ func (op *nmaReIPOp) prepare(execContext *opEngineExecContext) error {
 	}
 
 	// update re-ip list
-	err := updateReIPList(op.reIPList, execContext)
+	err := op.updateReIPList(execContext)
 	if err != nil {
 		return fmt.Errorf("[%s] error updating reIP list: %w", op.name, err)
 	}

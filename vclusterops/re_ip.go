@@ -38,8 +38,6 @@ type VReIPOptions struct {
 	// perform an additional HTTPS check (checkRunningDB operation) to verify that the database is running.
 	// This is useful when Re-IP should only be applied to down db.
 	CheckDBRunning bool
-	// DBRunning indicates if the database is UP, set it to true when you know the nodes in --hosts are UP
-	DBRunning bool
 }
 
 func VReIPFactory() VReIPOptions {
@@ -246,27 +244,10 @@ func (vcc VClusterCommands) produceReIPInstructions(options *VReIPOptions, vdb *
 
 	// re-ip
 	// at this stage the re-ip info should either by provided by
-	// the re-ip file (for vcluster CLI) or the Kubernetes operator.
-	// When db is up, we will call https endpoint for re-ip. This is
-	// the case when we need to re-ip a sandbox node in main cluster or
-	// a main cluster node in a sandbox. When db is down, we will call
-	// NMA endpoint for re-ip.
-	if options.DBRunning {
-		initiator := []string{options.Hosts[0]}
-		for _, info := range options.ReIPList {
-			reIPList := make(map[string]ReIPInfo)
-			reIPList[initiator[0]] = info
-			httpsReIPOp, err := makeHTTPSReIPOpForReIPCommand(initiator, reIPList,
-				options.usePassword, options.UserName, options.Password)
-			if err != nil {
-				return instructions, err
-			}
-			instructions = append(instructions, &httpsReIPOp)
-		}
-	} else {
-		nmaReIPOP := makeNMAReIPOp(options.ReIPList, vdb, options.TrimReIPList)
-		instructions = append(instructions, &nmaReIPOP)
-	}
+	// the re-ip file (for vcluster CLI) or the Kubernetes operator
+	nmaReIPOP := makeNMAReIPOp(options.ReIPList, vdb, options.TrimReIPList)
+
+	instructions = append(instructions, &nmaReIPOP)
 
 	return instructions, nil
 }
