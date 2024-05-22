@@ -222,7 +222,7 @@ func (vcc *VClusterCommands) reIP(options *DatabaseOptions, scName, primaryUpHos
 	// then we can get the latest node IPs in the sandbox/main-cluster
 	initiator := []string{primaryUpHost}
 	options.Hosts = initiator
-	err := vcc.getVDBFromRunningDBContainsSandbox(&vdb, options)
+	err := vcc.getVDBFromRunningDBIncludeSandbox(&vdb, options, AnySandbox)
 	if err != nil {
 		return fmt.Errorf("host %q in database is not available: %w", primaryUpHost, err)
 	}
