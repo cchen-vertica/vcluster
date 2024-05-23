@@ -199,16 +199,22 @@ func (vcc *VClusterCommands) produceUnsandboxSCInstructions(options *VUnsandboxO
 	}
 	instructions = append(instructions, &httpsGetUpNodesOp)
 
+	scHosts := []string{}
+	scNodeNames := []string{}
+	for nodeName, host := range options.NodeNameAddressMap {
+		scHosts = append(scHosts, host)
+		scNodeNames = append(scNodeNames, nodeName)
+	}
 	if options.hasUpNodeInSC {
 		// Stop the nodes in the subcluster that is to be unsandboxed
-		httpsStopNodeOp, e := makeHTTPSStopNodeOp(usePassword, username, options.Password,
-			nil)
+		httpsStopNodeOp, e := makeHTTPSStopNodeOp(scHosts, scNodeNames, usePassword,
+			username, options.Password, nil)
 		if e != nil {
 			return instructions, e
 		}
 
 		// Poll for nodes down
-		httpsPollScDown, e := makeHTTPSPollSubclusterNodeStateDownOp(options.SCName,
+		httpsPollScDown, e := makeHTTPSPollSubclusterNodeStateDownOp(scHosts, options.SCName,
 			usePassword, username, options.Password)
 		if e != nil {
 			return instructions, e
@@ -228,7 +234,7 @@ func (vcc *VClusterCommands) produceUnsandboxSCInstructions(options *VUnsandboxO
 	}
 
 	// Clean catalog dirs
-	nmaDeleteDirsOp, err := makeNMADeleteDirsSandboxOp(true, true /* sandbox */)
+	nmaDeleteDirsOp, err := makeNMADeleteDirsSandboxOp(scHosts, true, true /* sandbox */)
 	if err != nil {
 		return instructions, err
 	}
@@ -252,7 +258,7 @@ func (vcc *VClusterCommands) produceUnsandboxSCInstructions(options *VUnsandboxO
 		nmaRestartNodesOp := makeNMAStartNodeOpAfterUnsandbox("")
 
 		// Poll for nodes UP
-		httpsPollScUp, err := makeHTTPSPollSubclusterNodeStateUpOp(options.SCName,
+		httpsPollScUp, err := makeHTTPSPollSubclusterNodeStateUpOp(scHosts, options.SCName,
 			usePassword, username, options.Password)
 		if err != nil {
 			return instructions, err

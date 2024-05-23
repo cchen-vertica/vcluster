@@ -140,7 +140,11 @@ func (vcc *VClusterCommands) produceSandboxSubclusterInstructions(options *VSand
 	}
 
 	// Poll for sandboxed nodes to be up
-	httpsPollSubclusterNodeOp, err := makeHTTPSPollSubclusterNodeStateUpOp(options.SCName,
+	scHosts := []string{}
+	for _, host := range options.NodeNameAddressMap {
+		scHosts = append(scHosts, host)
+	}
+	httpsPollSubclusterNodeOp, err := makeHTTPSPollSubclusterNodeStateUpOp(scHosts, options.SCName,
 		usePassword, username, options.Password)
 	if err != nil {
 		return instructions, err
