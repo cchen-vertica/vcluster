@@ -208,15 +208,17 @@ func (c *CmdAddSubcluster) Run(vcc vclusterops.ClusterCommands) error {
 	}
 
 	if len(options.NewHosts) > 0 {
-		fmt.Printf("Adding hosts %v to subcluster %s\n",
-			options.NewHosts, options.SCName)
+		vlog.DisplayColorInfo("Adding hosts %v to subcluster %s", options.NewHosts, options.SCName)
 
 		options.VAddNodeOptions.DatabaseOptions = c.addSubclusterOptions.DatabaseOptions
 		options.VAddNodeOptions.SCName = c.addSubclusterOptions.SCName
 
 		vdb, err := vcc.VAddNode(&options.VAddNodeOptions)
 		if err != nil {
-			vcc.LogError(err, "failed to add nodes into the new subcluster")
+			const msg = "Failed to add nodes into the new subcluster"
+			vcc.LogError(err, msg)
+			fmt.Printf("%s\nHint: subcluster %q is successfully created, you should use add_node to add nodes\n",
+				msg, options.VAddNodeOptions.SCName)
 			return err
 		}
 		// update db info in the config file

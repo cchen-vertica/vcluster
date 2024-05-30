@@ -74,7 +74,7 @@ func (vcc VClusterCommands) VFetchNodeState(options *VFetchNodeStateOptions) ([]
 		return vcc.fetchNodeStateFromDownDB(options)
 	}
 
-	// produce list_allnodes instructions
+	// produce list_all_nodes instructions
 	instructions, err := vcc.produceListAllNodesInstructions(options, &vdb)
 	if err != nil {
 		return nil, fmt.Errorf("fail to produce instructions, %w", err)

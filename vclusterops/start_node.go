@@ -58,11 +58,11 @@ type VStartNodesInfo struct {
 }
 
 func VStartNodesOptionsFactory() VStartNodesOptions {
-	opt := VStartNodesOptions{}
+	options := VStartNodesOptions{}
 
 	// set default values to the params
-	opt.setDefaultValues()
-	return opt
+	options.setDefaultValues()
+	return options
 }
 
 func (options *VStartNodesOptions) setDefaultValues() {
@@ -72,8 +72,21 @@ func (options *VStartNodesOptions) setDefaultValues() {
 	options.Nodes = make(map[string]string)
 }
 
+func (options *VStartNodesOptions) validateRequiredOptions(logger vlog.Printer) error {
+	err := options.validateBaseOptions(commandRestartNode, logger)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (options *VStartNodesOptions) validateParseOptions(logger vlog.Printer) error {
-	return options.validateBaseOptions("restart_node", logger)
+	// batch 1: validate required parameters
+	err := options.validateRequiredOptions(logger)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // analyzeOptions will modify some options based on what is chosen
@@ -258,7 +271,7 @@ func (vcc VClusterCommands) produceStartNodesInstructions(startNodeInfo *VStartN
 
 	nmaHealthOp := makeNMAHealthOp(options.Hosts)
 	// need username for https operations
-	err := options.setUsePassword(vcc.Log)
+	err := options.setUsePasswordAndValidateUsernameIfNeeded(vcc.Log)
 	if err != nil {
 		return instructions, err
 	}
@@ -303,7 +316,7 @@ func (vcc VClusterCommands) produceStartNodesInstructions(startNodeInfo *VStartN
 	}
 
 	// require to have the same vertica version
-	nmaVerticaVersionOp := makeNMAVerticaVersionOpWithVDB(true /*hosts need to have the same Vertica version*/, vdb)
+	nmaVerticaVersionOp := makeNMAVerticaVersionOpBeforeStartNode(vdb, startNodeInfo.HostsToStart)
 	instructions = append(instructions, &nmaVerticaVersionOp)
 
 	// The second parameter (sourceConfHost) in produceTransferConfigOps is set to a nil value in the upload and download step

@@ -394,20 +394,6 @@ func ValidateUsernameAndPassword(opName string, useHTTPPassword bool, userName s
 	return nil
 }
 
-func ValidateSQLEndpointData(opName string, useDBPassword bool, userName string,
-	password *string, dbName string) error {
-	if userName == "" {
-		return fmt.Errorf("[%s] should always provide a username for local database connection", opName)
-	}
-	if dbName == "" {
-		return fmt.Errorf("[%s] should always provide a database name for local database connection", opName)
-	}
-	if useDBPassword && password == nil {
-		return fmt.Errorf("[%s] should properly set the password when a password is configured", opName)
-	}
-	return nil
-}
-
 const (
 	FileExist    = 0
 	FileNotExist = 1
@@ -472,8 +458,11 @@ func IsOptionSet(f *flag.FlagSet, optionName string) bool {
 
 // ValidateName will validate the name of an obj, the obj can be database, subcluster, etc.
 // when a name is provided, make sure no special chars are in it
-func ValidateName(name, obj string) error {
-	escapeChars := `=<>'^\".@*?#&/-:;{}()[] \~!%+|,` + "`$"
+func ValidateName(name, obj string, allowDash bool) error {
+	escapeChars := `=<>'^\".@*?#&/:;{}()[] \~!%+|,` + "`$"
+	if !allowDash {
+		escapeChars += "-"
+	}
 	for _, c := range name {
 		if strings.Contains(escapeChars, string(c)) {
 			return fmt.Errorf("invalid character in %s name: %c", obj, c)
@@ -483,7 +472,15 @@ func ValidateName(name, obj string) error {
 }
 
 func ValidateDBName(dbName string) error {
-	return ValidateName(dbName, "database")
+	return ValidateName(dbName, "database", false)
+}
+
+func ValidateScName(dbName string) error {
+	return ValidateName(dbName, "subcluster", true)
+}
+
+func ValidateSandboxName(dbName string) error {
+	return ValidateName(dbName, "sandbox", true)
 }
 
 // suppress help message for hidden options
@@ -594,6 +591,9 @@ func Max[T constraints.Ordered](a, b T) T {
 
 // GetPathPrefix returns a path prefix for a (catalog/data/depot) path of a node
 func GetPathPrefix(path string) string {
+	if path == "" {
+		return path
+	}
 	return filepath.Dir(filepath.Dir(path))
 }
 

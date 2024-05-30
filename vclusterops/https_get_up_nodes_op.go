@@ -34,6 +34,7 @@ const (
 	InstallPackageCmd
 	UnsandboxCmd
 	ManageConnectionDrainingCmd
+	SetConfigurationParametersCmd
 )
 
 type CommandType int
@@ -160,21 +161,17 @@ func (op *httpsGetUpNodesOp) processResult(execContext *opEngineExecContext) err
 		op.logResponse(host, result)
 		if !result.isPassing() {
 			allErrs = errors.Join(allErrs, result.err)
-		}
-
-		// We assume all the hosts are in the same db cluster
-		// If any of the hosts reject the request, other hosts will reject the request too
-		// Do not try other hosts when we see a http failure
-		if result.isFailing() && result.isHTTPRunning() {
-			exceptionHosts = append(exceptionHosts, host)
-			continue
-		}
-
-		if !result.isPassing() {
+			if result.isUnauthorizedRequest() || result.isInternalError() {
+				// Authentication error and any unexpected internal server error
+				exceptionHosts = append(exceptionHosts, host)
+				continue
+			}
+			// Connection refused: node is down
 			downHosts = append(downHosts, host)
 			continue
 		}
 
+		// Parse response from /nodes to validate input
 		nodesStates := nodesStateInfo{}
 		err := op.parseAndCheckResponse(host, result.content, &nodesStates)
 		if err != nil {
@@ -191,7 +188,7 @@ func (op *httpsGetUpNodesOp) processResult(execContext *opEngineExecContext) err
 			}
 		}
 
-		// collect all the up hosts
+		// Collect all the up hosts
 		err = op.collectUpHosts(nodesStates, host, upHosts, upScInfo, sandboxInfo, upScNodes, scNodes)
 		if err != nil {
 			allErrs = errors.Join(allErrs, err)
@@ -209,19 +206,22 @@ func (op *httpsGetUpNodesOp) processResult(execContext *opEngineExecContext) err
 	execContext.nodesInfo = upScNodes.ToSlice()
 	execContext.scNodesInfo = scNodes.ToSlice()
 	execContext.upHostsToSandboxes = sandboxInfo
-	ignoreErrors := op.processHostLists(upHosts, upScInfo, exceptionHosts, downHosts, sandboxInfo, execContext)
+	ignoreErrors, errMsg := op.processHostLists(upHosts, upScInfo, exceptionHosts, downHosts, sandboxInfo, execContext)
 	if ignoreErrors {
 		return nil
 	}
-
-	return errors.Join(allErrs, fmt.Errorf("no up nodes detected"))
+	if errMsg != nil {
+		return errors.Join(allErrs, errMsg)
+	}
+	return allErrs
 }
 
 // Return true if all the results need to be scanned to figure out UP hosts
 func isCompleteScanRequired(cmdType CommandType) bool {
 	return cmdType == SandboxCmd || cmdType == StopDBCmd ||
 		cmdType == UnsandboxCmd || cmdType == StopSubclusterCmd ||
-		cmdType == ManageConnectionDrainingCmd
+		cmdType == ManageConnectionDrainingCmd ||
+		cmdType == SetConfigurationParametersCmd
 }
 
 func (op *httpsGetUpNodesOp) finalize(_ *opEngineExecContext) error {
@@ -241,13 +241,13 @@ func (op *httpsGetUpNodesOp) checkSandboxUp(sandboxingInfo map[string]string, sa
 // down or erratic hosts.  Additionally, it determines if the op should fail or not.
 func (op *httpsGetUpNodesOp) processHostLists(upHosts mapset.Set[string], upScInfo map[string]string,
 	exceptionHosts, downHosts []string, sandboxInfo map[string]string,
-	execContext *opEngineExecContext) (ignoreErrors bool) {
+	execContext *opEngineExecContext) (ignoreErrors bool, errMsg error) {
 	execContext.upScInfo = upScInfo
 
 	// when we found up nodes in the database, but cannot found up nodes in subcluster, we throw an error
 	if op.cmdType == StopSubclusterCmd && upHosts.Cardinality() > 0 && len(execContext.nodesInfo) == 0 {
 		op.logger.PrintError(`[%s] There are no UP nodes in subcluster %s. The subcluster is already down`, op.name, op.scName)
-		return false
+		return false, nil
 	}
 	if op.sandbox != "" && op.cmdType != UnsandboxCmd {
 		upSandbox := op.checkSandboxUp(sandboxInfo, op.sandbox)
@@ -265,18 +265,20 @@ func (op *httpsGetUpNodesOp) processHostLists(upHosts mapset.Set[string], upScIn
 		execContext.upHosts = upHosts.ToSlice()
 		// sorting the up hosts will be helpful for picking up the initiator in later instructions
 		sort.Strings(execContext.upHosts)
-		return true
+		return true, nil
 	}
 	if len(exceptionHosts) > 0 {
 		op.logger.PrintError(`[%s] fail to call https endpoint of database %s on hosts %s`, op.name, op.DBName, exceptionHosts)
+		errMsg = errors.Join(errMsg, fmt.Errorf("failed to access node on hosts %v", exceptionHosts))
 	}
 
 	if len(downHosts) > 0 {
 		op.logger.PrintError(`[%s] did not detect database %s running on hosts %v`, op.name, op.DBName, downHosts)
 		op.updateSpinnerStopFailMessage("did not detect database %s running on hosts %v", op.DBName, downHosts)
+		errMsg = errors.Join(errMsg, fmt.Errorf("no up node detected on hosts %v", downHosts))
 	}
 
-	return op.noUpHostsOk
+	return op.noUpHostsOk, errMsg
 }
 
 // validateHosts can validate if hosts in user input matches the ones in GET /nodes response
@@ -322,6 +324,7 @@ func (op *httpsGetUpNodesOp) collectUpHosts(nodesStates nodesStateInfo, host str
 			upHosts.Add(node.Address)
 			upScInfo[node.Address] = node.Subcluster
 			if op.cmdType == ManageConnectionDrainingCmd ||
+				op.cmdType == SetConfigurationParametersCmd ||
 				op.cmdType == StopDBCmd {
 				sandboxInfo[node.Address] = node.Sandbox
 			}

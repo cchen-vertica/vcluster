@@ -240,6 +240,13 @@ func (op *opBase) parseAndCheckMapResponse(host, responseContent string) (opResp
 	return responseObj, err
 }
 
+func (op *opBase) parseAndCheckStringResponse(host, responseContent string) (string, error) {
+	var responseStr string
+	err := op.parseAndCheckResponse(host, responseContent, &responseStr)
+
+	return responseStr, err
+}
+
 func (op *opBase) setClusterHTTPRequestName() {
 	op.clusterHTTPRequest.Name = op.name
 }
@@ -512,6 +519,8 @@ type ClusterCommands interface {
 	VFetchCoordinationDatabase(options *VFetchCoordinationDatabaseOptions) (VCoordinationDatabase, error)
 	VUnsandbox(options *VUnsandboxOptions) error
 	VStopSubcluster(options *VStopSubclusterOptions) error
+	VAlterSubclusterType(options *VAlterSubclusterTypeOptions) error
+	VRenameSubcluster(options *VRenameSubclusterOptions) error
 	VFetchNodesDetails(options *VFetchNodesDetailsOptions) (NodesDetails, error)
 }
 

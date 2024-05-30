@@ -152,7 +152,7 @@ const (
 	configShowSubCmd        = "show"
 	replicationSubCmd       = "replication"
 	startReplicationSubCmd  = "start"
-	listAllNodesSubCmd      = "list_allnodes"
+	listAllNodesSubCmd      = "list_all_nodes"
 	startDBSubCmd           = "start_db"
 	dropDBSubCmd            = "drop_db"
 	addSCSubCmd             = "add_subcluster"

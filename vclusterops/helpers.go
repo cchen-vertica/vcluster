@@ -154,26 +154,82 @@ func getInitiatorHost(primaryUpNodes, hostsToSkip []string) (string, error) {
 	return initiatorHosts[0], nil
 }
 
-// getVDBFromRunningDB will retrieve db configurations from a non-sandboxed host by calling https endpoints of a running db
-func (vcc VClusterCommands) getVDBFromRunningDB(vdb *VCoordinationDatabase, options *DatabaseOptions) error {
-	return vcc.getVDBFromRunningDBImpl(vdb, options, false, util.MainClusterSandbox, false)
+// getInitiatorHostInCluster returns an initiator that is the first up node of a subcluster in the main cluster
+// or a sandbox other than the target subcluster
+func getInitiatorHostInCluster(name, sandbox, scname string, vdb *VCoordinationDatabase) ([]string, error) {
+	// up hosts will be :
+	// 1. up hosts from the main subcluster if the sandbox is empty
+	// 2. up hosts from the sandbox if the sandbox is specified
+	var upHost string
+	for _, node := range vdb.HostNodeMap {
+		if node.State == util.NodeDownState {
+			continue
+		}
+		// the up host is used to promote/demote subcluster
+		// should not be a part of this subcluster
+		if node.Sandbox == sandbox && node.Subcluster != scname {
+			upHost = node.Address
+			break
+		}
+	}
+	if upHost == "" {
+		if sandbox == "" {
+			return nil, fmt.Errorf(`[%s] cannot find any up hosts for subcluster %s in main subcluster`, name, scname)
+		}
+		return nil, fmt.Errorf("[%s] cannot find any up hosts for subcluster %s in the sandbox %s", name, scname, sandbox)
+	}
+	// use first up host to execute https post request
+	initiatorHost := []string{upHost}
+	return initiatorHost, nil
 }
 
-// getVDBFromRunningDBContainsSandbox will retrieve db configurations from a non-sandboxed host by calling https endpoints of
+// getInitiatorHostForReplication returns an initiator that is the first up source host in the main cluster
+// or a sandbox
+func getInitiatorHostForReplication(name, sandbox string, hosts []string, vdb *VCoordinationDatabase) ([]string, error) {
+	// source hosts will be :
+	// 1. up hosts from the main subcluster if the sandbox is empty
+	// 2. up hosts from the sandbox if the sandbox is specified
+	var sourceHosts []string
+	for _, node := range vdb.HostNodeMap {
+		if node.State != util.NodeDownState && node.Sandbox == sandbox {
+			sourceHosts = append(sourceHosts, node.Address)
+		}
+	}
+	sourceHosts = util.SliceCommon(hosts, sourceHosts)
+	if len(sourceHosts) == 0 {
+		if sandbox == "" {
+			return nil, fmt.Errorf("[%s] cannot find any up hosts from source database", name)
+		}
+		return nil, fmt.Errorf("[%s] cannot find any up hosts in the sandbox %s", name, sandbox)
+	}
+
+	initiatorHost := []string{getInitiator(sourceHosts)}
+	return initiatorHost, nil
+}
+
+// getVDBFromRunningDB will retrieve db configurations from a non-sandboxed host by calling https endpoints of a running db
+func (vcc VClusterCommands) getVDBFromRunningDB(vdb *VCoordinationDatabase, options *DatabaseOptions) error {
+	return vcc.getVDBFromRunningDBImpl(vdb, options, false /*allow use http result from sandbox nodes*/, util.MainClusterSandbox,
+		false /*update node state by sending http request to each node*/)
+}
+
+// getVDBFromMainRunningDBContainsSandbox will retrieve db configurations from a non-sandboxed host by calling https endpoints of
 // a running db, and it can return the accurate state of the sandboxed nodes.
-func (vcc VClusterCommands) getVDBFromRunningDBContainsSandbox(vdb *VCoordinationDatabase, options *DatabaseOptions) error {
-	return vcc.getVDBFromRunningDBImpl(vdb, options, false, util.MainClusterSandbox, true)
+func (vcc VClusterCommands) getVDBFromMainRunningDBContainsSandbox(vdb *VCoordinationDatabase, options *DatabaseOptions) error {
+	return vcc.getVDBFromRunningDBImpl(vdb, options, false /*allow use http result from sandbox nodes*/, util.MainClusterSandbox,
+		true /*update node state by sending http request to each node*/)
 }
 
 // getVDBFromRunningDBIncludeSandbox will retrieve db configurations from a sandboxed host by calling https endpoints of a running db
 func (vcc VClusterCommands) getVDBFromRunningDBIncludeSandbox(vdb *VCoordinationDatabase, options *DatabaseOptions, sandbox string) error {
-	return vcc.getVDBFromRunningDBImpl(vdb, options, true, sandbox, false)
+	return vcc.getVDBFromRunningDBImpl(vdb, options, true /*allow use http result from sandbox nodes*/, sandbox,
+		false /*update node state by sending http request to each node*/)
 }
 
 // getVDBFromRunningDB will retrieve db configurations by calling https endpoints of a running db
 func (vcc VClusterCommands) getVDBFromRunningDBImpl(vdb *VCoordinationDatabase, options *DatabaseOptions,
 	allowUseSandboxRes bool, sandbox string, updateNodeState bool) error {
-	err := options.setUsePassword(vcc.Log)
+	err := options.setUsePasswordAndValidateUsernameIfNeeded(vcc.Log)
 	if err != nil {
 		return fmt.Errorf("fail to set userPassword while retrieving database configurations, %w", err)
 	}
@@ -214,7 +270,7 @@ func (vcc VClusterCommands) getVDBFromRunningDBImpl(vdb *VCoordinationDatabase, 
 
 // getClusterInfoFromRunningDB will retrieve db configurations by calling https endpoints of a running db
 func (vcc VClusterCommands) getClusterInfoFromRunningDB(vdb *VCoordinationDatabase, options *DatabaseOptions) error {
-	err := options.setUsePassword(vcc.Log)
+	err := options.setUsePasswordAndValidateUsernameIfNeeded(vcc.Log)
 	if err != nil {
 		return fmt.Errorf("fail to set userPassword while retrieving cluster configurations, %w", err)
 	}

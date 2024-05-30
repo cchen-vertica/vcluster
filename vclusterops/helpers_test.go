@@ -71,6 +71,27 @@ func TestForGetPrimaryHostsWithLatestCatalog(t *testing.T) {
 	assert.Equal(t, primaryHostsWithLatestCatalog, []string{})
 }
 
+func TestForGetInitiatorHostInMainCluster(t *testing.T) {
+	// successfully get an initiator host for subcluster sc1 to promote/demote in the sandbox
+	mockHostNodeMap := map[string]*VCoordinationNode{
+		"192.168.1.101": {Address: "192.168.1.101", State: "UP", Sandbox: "sand", Subcluster: "sc1"},
+		"192.168.1.102": {Address: "192.168.1.102", State: "UP", Sandbox: "sand", Subcluster: "sc2"},
+		"192.168.1.103": {Address: "192.168.1.103", State: "UP", Sandbox: "", Subcluster: "default_subcluster"},
+		"192.168.1.104": {Address: "192.168.1.104", State: "UP", Sandbox: "", Subcluster: "sc4"}}
+	vdb := VCoordinationDatabase{HostNodeMap: mockHostNodeMap}
+	initiatorHost, _ := getInitiatorHostInCluster("", "sand", "sc1", &vdb)
+	assert.Equal(t, initiatorHost, []string{"192.168.1.102"})
+	// successfully get an initiator host for default_subcluster to promote/demote in the main subcluster
+	initiatorHost, _ = getInitiatorHostInCluster("", "", "default_subcluster", &vdb)
+	assert.Equal(t, initiatorHost, []string{"192.168.1.104"})
+	// unable to find any up hosts for default_subcluster in the main subcluster
+	mockHostNodeMap = map[string]*VCoordinationNode{
+		"192.168.1.103": {Address: "192.168.1.103", State: "UP", Sandbox: "", Subcluster: "default_subcluster"}}
+	vdb = VCoordinationDatabase{HostNodeMap: mockHostNodeMap}
+	_, err := getInitiatorHostInCluster("", "", "default_subcluster", &vdb)
+	assert.ErrorContains(t, err, "cannot find any up hosts for subcluster default_subcluster in main subcluster")
+}
+
 func TestForgetInitiatorHost(t *testing.T) {
 	nodesList1 := []string{"10.0.0.0", "10.0.0.1", "10.0.0.2"}
 	hostsToSkip1 := []string{"10.0.0.10", "10.0.0.11"}
@@ -87,6 +108,35 @@ func TestForgetInitiatorHost(t *testing.T) {
 	hostsToSkip1 = nodesList1
 	initiatorHost, _ = getInitiatorHost(nodesList1, hostsToSkip1)
 	assert.Equal(t, initiatorHost, "")
+}
+
+func TestForGetSourceHostForReplication(t *testing.T) {
+	mockHostNodeMap := map[string]*VCoordinationNode{
+		"192.168.1.101": {Address: "192.168.1.101", State: "UP", Sandbox: "sand"},
+		"192.168.1.102": {Address: "192.168.1.102", State: "UP", Sandbox: "sand"},
+		"192.168.1.103": {Address: "192.168.1.103", State: "UP", Sandbox: ""},
+		"192.168.1.104": {Address: "192.168.1.104", State: "UP", Sandbox: ""},
+	}
+
+	// successfully find source hosts from sandbox sand
+	vdb := VCoordinationDatabase{HostNodeMap: mockHostNodeMap}
+	hosts := []string{"192.168.1.102"}
+	sourceHosts, err := getInitiatorHostForReplication("", "sand", hosts, &vdb)
+	assert.NoError(t, err)
+	assert.Equal(t, sourceHosts, hosts)
+
+	// successfully find source hosts from main cluster
+	vdb = VCoordinationDatabase{HostNodeMap: mockHostNodeMap}
+	hosts = []string{"192.168.1.103"}
+	sourceHosts, err = getInitiatorHostForReplication("", "", hosts, &vdb)
+	assert.NoError(t, err)
+	assert.Equal(t, sourceHosts, hosts)
+
+	// unable to find any up hosts from main cluster
+	vdb = VCoordinationDatabase{HostNodeMap: mockHostNodeMap}
+	hosts = []string{}
+	_, err = getInitiatorHostForReplication("", "", hosts, &vdb)
+	assert.ErrorContains(t, err, "cannot find any up hosts from source database")
 }
 
 func TestForgetCatalogPath(t *testing.T) {

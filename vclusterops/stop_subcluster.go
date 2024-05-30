@@ -33,11 +33,11 @@ type VStopSubclusterOptions struct {
 }
 
 func VStopSubclusterOptionsFactory() VStopSubclusterOptions {
-	opt := VStopSubclusterOptions{}
+	options := VStopSubclusterOptions{}
 	// set default values to the params
-	opt.setDefaultValues()
+	options.setDefaultValues()
 
-	return opt
+	return options
 }
 
 func (options *VStopSubclusterOptions) setDefaultValues() {
@@ -46,11 +46,19 @@ func (options *VStopSubclusterOptions) setDefaultValues() {
 }
 
 func (options *VStopSubclusterOptions) validateRequiredOptions(log vlog.Printer) error {
-	err := options.validateBaseOptions(commandStopCluster, log)
+	err := options.validateBaseOptions(commandStopSubcluster, log)
 	if err != nil {
 		return err
 	}
 
+	if options.SCName == "" {
+		return fmt.Errorf("must specify a subcluster name")
+	}
+
+	err = util.ValidateScName(options.SCName)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

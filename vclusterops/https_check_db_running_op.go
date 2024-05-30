@@ -37,8 +37,9 @@ const (
 	StopSC
 	ReIP
 
-	checkDBRunningOpName = "HTTPSCheckDBRunningOp"
-	checkDBRunningOpDesc = "Verify database is running"
+	checkDBRunningOpName    = "HTTPSCheckDBRunningOp"
+	checkDBRunningOpDesc    = "Verify database is running"
+	checkDBNotRunningOpDesc = "Verify database is not running"
 )
 
 func (op opType) String() string {
@@ -99,6 +100,9 @@ func makeHTTPSCheckRunningDBOp(hosts []string,
 	op.userName = userName
 	op.httpsPassword = httpsPassword
 	op.opType = operationType
+	if op.opType == StopDB {
+		op.description = checkDBNotRunningOpDesc
+	}
 	return op, nil
 }
 
@@ -111,21 +115,12 @@ func makeHTTPSCheckRunningDBWithSandboxOp(hosts []string,
 	useHTTPPassword bool, userName string, sandbox string, mainCluster bool,
 	httpsPassword *string, operationType opType,
 ) (httpsCheckRunningDBOp, error) {
-	op := httpsCheckRunningDBOp{}
-	op.name = checkDBRunningOpName
-	op.description = checkDBRunningOpDesc
-	op.hosts = hosts
-	op.useHTTPPassword = useHTTPPassword
-	op.sandbox = sandbox         // check if DB is running on specified sandbox
-	op.mainCluster = mainCluster // check if DB is running on the main cluster
-	err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
+	op, err := makeHTTPSCheckRunningDBOp(hosts, useHTTPPassword, userName, httpsPassword, operationType)
 	if err != nil {
 		return op, err
 	}
-
-	op.userName = userName
-	op.httpsPassword = httpsPassword
-	op.opType = operationType
+	op.sandbox = sandbox         // check if DB is running on specified sandbox
+	op.mainCluster = mainCluster // check if DB is running on the main cluster
 	return op, nil
 }
 

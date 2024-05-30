@@ -33,16 +33,18 @@ type VUnsandboxOptions struct {
 	// if any node in the target subcluster is up. This is for internal use only.
 	hasUpNodeInSC bool
 	// The expected node names with their IPs in the subcluster, the user of vclusterOps need
-	// to make sure the provided values are correct.
+	// to make sure the provided values are correct. This option will be used to do re-ip in
+	// the main cluster.
 	NodeNameAddressMap map[string]string
-	// A primary up host in the main cluster
+	// A primary up host in the main cluster. This option will be used to do re-ip in
+	// the main cluster.
 	PrimaryUpHost string
 }
 
 func VUnsandboxOptionsFactory() VUnsandboxOptions {
-	opt := VUnsandboxOptions{}
-	opt.setDefaultValues()
-	return opt
+	options := VUnsandboxOptions{}
+	options.setDefaultValues()
+	return options
 }
 
 func (options *VUnsandboxOptions) setDefaultValues() {
@@ -51,13 +53,27 @@ func (options *VUnsandboxOptions) setDefaultValues() {
 }
 
 func (options *VUnsandboxOptions) validateRequiredOptions(logger vlog.Printer) error {
-	err := options.validateBaseOptions("unsandbox_subcluster", logger)
+	err := options.validateBaseOptions(commandUnsandboxSC, logger)
 	if err != nil {
 		return err
 	}
 
 	if options.SCName == "" {
 		return fmt.Errorf("must specify a subcluster name")
+	}
+
+	err = util.ValidateScName(options.SCName)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (options *VUnsandboxOptions) validateParseOptions(logger vlog.Printer) error {
+	// batch 1: validate required parameters
+	err := options.validateRequiredOptions(logger)
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -84,8 +100,8 @@ func (options *VUnsandboxOptions) analyzeOptions() (err error) {
 	return nil
 }
 
-func (options *VUnsandboxOptions) ValidateAnalyzeOptions(vcc VClusterCommands) error {
-	if err := options.validateRequiredOptions(vcc.Log); err != nil {
+func (options *VUnsandboxOptions) ValidateAnalyzeOptions(logger vlog.Printer) error {
+	if err := options.validateParseOptions(logger); err != nil {
 		return err
 	}
 	return options.analyzeOptions()
@@ -109,7 +125,7 @@ func (e *SubclusterNotSandboxedError) Error() string {
 // - Get cluster and nodes info (check if the DB is Eon)
 // - Get the subcluster info (check if the target subcluster is sandboxed)
 func (vcc *VClusterCommands) unsandboxPreCheck(vdb *VCoordinationDatabase, options *VUnsandboxOptions) error {
-	err := vcc.getVDBFromRunningDBContainsSandbox(vdb, &options.DatabaseOptions)
+	err := vcc.getVDBFromMainRunningDBContainsSandbox(vdb, &options.DatabaseOptions)
 	if err != nil {
 		return err
 	}

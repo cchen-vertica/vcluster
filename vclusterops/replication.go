@@ -33,82 +33,120 @@ type VReplicationDatabaseOptions struct {
 	TargetUserName  string
 	TargetPassword  *string
 	SourceTLSConfig string
-	Sandbox         string
+	SandboxName     string
 }
 
 func VReplicationDatabaseFactory() VReplicationDatabaseOptions {
-	opt := VReplicationDatabaseOptions{}
+	options := VReplicationDatabaseOptions{}
 	// set default values to the params
-	opt.setDefaultValues()
-	return opt
+	options.setDefaultValues()
+	return options
 }
 
-func (opt *VReplicationDatabaseOptions) validateEonOptions(_ vlog.Printer) error {
-	if !opt.IsEon {
+func (options *VReplicationDatabaseOptions) validateRequiredOptions(logger vlog.Printer) error {
+	err := options.validateBaseOptions(commandReplicationStart, logger)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (options *VReplicationDatabaseOptions) validateEonOptions() error {
+	if !options.IsEon {
 		return fmt.Errorf("replication is only supported in Eon mode")
 	}
 	return nil
 }
 
-func (opt *VReplicationDatabaseOptions) validateParseOptions(logger vlog.Printer) error {
-	err := opt.validateEonOptions(logger)
-	if err != nil {
-		return err
-	}
-	if len(opt.TargetHosts) == 0 {
+func (options *VReplicationDatabaseOptions) validateExtraOptions() error {
+	if len(options.TargetHosts) == 0 {
 		return fmt.Errorf("must specify a target host or target host list")
 	}
 
 	// valiadate target database
-	if opt.TargetDB == "" {
+	if options.TargetDB == "" {
 		return fmt.Errorf("must specify a target database name")
 	}
-	err = util.ValidateDBName(opt.TargetDB)
+	err := util.ValidateDBName(options.TargetDB)
 	if err != nil {
 		return err
 	}
 
-	// need to provide a password or certs in source database
-	if opt.Password == nil && (opt.Cert == "" || opt.Key == "") {
-		return fmt.Errorf("must provide a password or certs")
+	// need to provide a password or key and certs
+	if options.Password == nil && (options.Cert == "" || options.Key == "") {
+		// validate key and cert files in local file system
+		_, err = getCertFilePaths()
+		if err != nil {
+			// in case that the key or cert files do not exist
+			return fmt.Errorf("must provide a password, key and certificates explicitly," +
+				" or key and certificate files in the default paths")
+		}
 	}
 
 	// need to provide a password or TLSconfig if source and target username are different
-	if opt.TargetUserName != opt.UserName {
-		if opt.TargetPassword == nil && opt.SourceTLSConfig == "" {
+	if options.TargetUserName != options.UserName {
+		if options.TargetPassword == nil && options.SourceTLSConfig == "" {
 			return fmt.Errorf("only trust authentication can support username without password or TLSConfig")
 		}
 	}
 
-	return opt.validateBaseOptions(commandReplicationStart, logger)
+	if options.SandboxName != "" {
+		err = util.ValidateSandboxName(options.SandboxName)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (options *VReplicationDatabaseOptions) validateParseOptions(logger vlog.Printer) error {
+	// batch 1: validate required parameters
+	err := options.validateRequiredOptions(logger)
+	if err != nil {
+		return err
+	}
+
+	// batch 2: validate eon params
+	err = options.validateEonOptions()
+	if err != nil {
+		return err
+	}
+
+	// batch 3: validate all other params
+	err = options.validateExtraOptions()
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // analyzeOptions will modify some options based on what is chosen
-func (opt *VReplicationDatabaseOptions) analyzeOptions() (err error) {
-	if len(opt.TargetHosts) > 0 {
+func (options *VReplicationDatabaseOptions) analyzeOptions() (err error) {
+	if len(options.TargetHosts) > 0 {
 		// resolve RawHosts to be IP addresses
-		opt.TargetHosts, err = util.ResolveRawHostsToAddresses(opt.TargetHosts, opt.IPv6)
+		options.TargetHosts, err = util.ResolveRawHostsToAddresses(options.TargetHosts, options.IPv6)
 		if err != nil {
 			return err
 		}
 	}
 	// we analyze host names when it is set in user input, otherwise we use hosts in yaml config
-	if len(opt.RawHosts) > 0 {
+	if len(options.RawHosts) > 0 {
 		// resolve RawHosts to be IP addresses
-		hostAddresses, err := util.ResolveRawHostsToAddresses(opt.RawHosts, opt.IPv6)
+		hostAddresses, err := util.ResolveRawHostsToAddresses(options.RawHosts, options.IPv6)
 		if err != nil {
 			return err
 		}
-		opt.Hosts = hostAddresses
+		options.Hosts = hostAddresses
 	}
 	return nil
 }
 
-func (opt *VReplicationDatabaseOptions) validateAnalyzeOptions(logger vlog.Printer) error {
-	if err := opt.validateParseOptions(logger); err != nil {
+func (options *VReplicationDatabaseOptions) validateAnalyzeOptions(logger vlog.Printer) error {
+	if err := options.validateParseOptions(logger); err != nil {
 		return err
 	}
-	return opt.analyzeOptions()
+	return options.analyzeOptions()
 }
 
 // VReplicateDatabase can copy all table data and metadata from this cluster to another
@@ -125,8 +163,15 @@ func (vcc VClusterCommands) VReplicateDatabase(options *VReplicationDatabaseOpti
 		return err
 	}
 
+	// retrieve information from the database to accurately determine the state of each node in both the main cluster and andbox
+	vdb := makeVCoordinationDatabase()
+	err = vcc.getVDBFromRunningDBIncludeSandbox(&vdb, &options.DatabaseOptions, AnySandbox)
+	if err != nil {
+		return err
+	}
+
 	// produce database replication instructions
-	instructions, err := vcc.produceDBReplicationInstructions(options)
+	instructions, err := vcc.produceDBReplicationInstructions(options, &vdb)
 	if err != nil {
 		return fmt.Errorf("fail to produce instructions, %w", err)
 	}
@@ -151,15 +196,15 @@ func (vcc VClusterCommands) VReplicateDatabase(options *VReplicationDatabaseOpti
 
 // The generated instructions will later perform the following operations necessary
 // for a successful replication.
-//   - Check nodes state
 //   - Check NMA connectivity
 //   - Check Vertica versions
 //   - Replicate database
-func (vcc VClusterCommands) produceDBReplicationInstructions(options *VReplicationDatabaseOptions) ([]clusterOp, error) {
+func (vcc VClusterCommands) produceDBReplicationInstructions(options *VReplicationDatabaseOptions,
+	vdb *VCoordinationDatabase) ([]clusterOp, error) {
 	var instructions []clusterOp
 
 	// need username for https operations in source database
-	err := options.setUsePassword(vcc.Log)
+	err := options.setUsePasswordAndValidateUsernameIfNeeded(vcc.Log)
 	if err != nil {
 		return instructions, err
 	}
@@ -178,8 +223,8 @@ func (vcc VClusterCommands) produceDBReplicationInstructions(options *VReplicati
 		vcc.Log.Info("Current target username", "username", options.TargetUserName)
 	}
 
-	httpsGetUpNodesOp, err := makeHTTPSCheckNodeStateOp(options.Hosts,
-		options.usePassword, options.UserName, options.Password)
+	httpsDisallowMultipleNamespacesOp, err := makeHTTPSDisallowMultipleNamespacesOp(options.Hosts,
+		options.usePassword, options.UserName, options.Password, options.SandboxName, vdb)
 	if err != nil {
 		return instructions, err
 	}
@@ -192,15 +237,15 @@ func (vcc VClusterCommands) produceDBReplicationInstructions(options *VReplicati
 	initiatorTargetHost := getInitiator(options.TargetHosts)
 	httpsStartReplicationOp, err := makeHTTPSStartReplicationOp(options.DBName, options.Hosts, options.usePassword,
 		options.UserName, options.Password, targetUsePassword, options.TargetDB, options.TargetUserName, initiatorTargetHost,
-		options.TargetPassword, options.SourceTLSConfig, options.Sandbox)
+		options.TargetPassword, options.SourceTLSConfig, options.SandboxName, vdb)
 	if err != nil {
 		return instructions, err
 	}
 
 	instructions = append(instructions,
-		&httpsGetUpNodesOp,
 		&nmaHealthOp,
 		&nmaVerticaVersionOp,
+		&httpsDisallowMultipleNamespacesOp,
 		&httpsStartReplicationOp,
 	)
 	return instructions, nil

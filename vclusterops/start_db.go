@@ -26,11 +26,19 @@ import (
 // with VStartDatabase.
 type VStartDatabaseOptions struct {
 	// basic db info
+	// Devloper Guide:
+	// The --hosts flag for start_db is used to start sandboxed hosts
+	// If you want to partial start a down db by using --hosts
+	// You should input more than half of the primary nodes to meet the quorum requirement
+	// If quorum requirement is not meet, the start_db process will hang until timeout
+	// And you need to manually kill those startup failed vertica processes.
 	DatabaseOptions
 	// timeout for polling the states of all nodes in the database in HTTPSPollNodeStateOp
 	StatePollingTimeout int
 	// whether trim the input host list based on the catalog info
 	TrimHostList bool
+	Sandbox      string // Start db on given sandbox
+	MainCluster  bool   // Start db on main cluster only
 	// If the path is set, the NMA will store the Vertica start command at the path
 	// instead of executing it. This is useful in containerized environments where
 	// you may not want to have both the NMA and Vertica server in the same container.
@@ -44,12 +52,12 @@ type VStartDatabaseOptions struct {
 }
 
 func VStartDatabaseOptionsFactory() VStartDatabaseOptions {
-	opt := VStartDatabaseOptions{}
+	options := VStartDatabaseOptions{}
 
 	// set default values to the params
-	opt.setDefaultValues()
+	options.setDefaultValues()
 
-	return opt
+	return options
 }
 
 func (options *VStartDatabaseOptions) setDefaultValues() {
@@ -59,11 +67,10 @@ func (options *VStartDatabaseOptions) setDefaultValues() {
 }
 
 func (options *VStartDatabaseOptions) validateRequiredOptions(logger vlog.Printer) error {
-	err := options.validateBaseOptions("start_db", logger)
+	err := options.validateBaseOptions(commandStartDB, logger)
 	if err != nil {
 		return err
 	}
-
 	return options.validateCatalogPath()
 }
 
@@ -71,7 +78,6 @@ func (options *VStartDatabaseOptions) validateEonOptions() error {
 	if options.CommunalStorageLocation != "" {
 		return util.ValidateCommunalStorageLocation(options.CommunalStorageLocation)
 	}
-
 	return nil
 }
 
@@ -82,7 +88,11 @@ func (options *VStartDatabaseOptions) validateParseOptions(logger vlog.Printer) 
 		return err
 	}
 	// batch 2: validate eon params
-	return options.validateEonOptions()
+	err = options.validateEonOptions()
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (options *VStartDatabaseOptions) analyzeOptions() (err error) {
@@ -236,7 +246,7 @@ func (vcc VClusterCommands) produceStartDBPreCheck(options *VStartDatabaseOption
 
 	nmaHealthOp := makeNMAHealthOp(options.Hosts)
 	// need username for https operations
-	err := options.setUsePassword(vcc.Log)
+	err := options.setUsePasswordAndValidateUsernameIfNeeded(vcc.Log)
 	if err != nil {
 		return instructions, err
 	}
