@@ -34,7 +34,8 @@ type VRemoveScOptions struct {
 	// to make sure the provided values are correct. This option will be used to do re-ip in
 	// the cluster that contains the subcluster.
 	NodeNameAddressMap map[string]string
-	//
+	// A primary up host in the cluster outside the subcluster. This option will be used to do re-ip in
+	// the cluster.
 	PrimaryUpHost string
 }
 
@@ -148,7 +149,8 @@ func (vcc VClusterCommands) VRemoveSubcluster(removeScOpt *VRemoveScOptions) (VC
 	}
 
 	// if the users provide extra node information, we will check and do re-ip for the nodes
-	// in the subcluster if needed
+	// in the subcluster if needed. If catalog has stale IPs of the nodes in the subcluster,
+	// removing node will fail at delete-directory step.
 	if removeScOpt.PrimaryUpHost != "" && len(removeScOpt.NodeNameAddressMap) > 0 {
 		e := vcc.reIP(&removeScOpt.DatabaseOptions,
 			removeScOpt.SCName,
