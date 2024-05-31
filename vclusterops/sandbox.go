@@ -200,7 +200,7 @@ func (options *VSandboxOptions) runCommand(vcc VClusterCommands) error {
 	// to provide some node information
 	if options.SandboxPrimaryUpHost != "" && len(options.NodeNameAddressMap) > 0 {
 		err := vcc.reIP(&options.DatabaseOptions, options.SCName, options.SandboxPrimaryUpHost,
-			options.NodeNameAddressMap)
+			options.NodeNameAddressMap, true /*reload spread*/)
 		if err != nil {
 			return err
 		}
@@ -248,7 +248,7 @@ func runSandboxCmd(vcc VClusterCommands, i sandboxInterface) error {
 // cause inconsistent IPs between the sandbox and the main cluster. The main cluster will
 // have a stale node IP so moving that pod back to the main cluster will fail.
 func (vcc *VClusterCommands) reIP(options *DatabaseOptions, scName, primaryUpHost string,
-	nodeNameAddressMap map[string]string) error {
+	nodeNameAddressMap map[string]string, reloadSpread bool) error {
 	reIPList := []ReIPInfo{}
 	reIPHosts := []string{}
 	vdb := makeVCoordinationDatabase()
@@ -277,7 +277,7 @@ func (vcc *VClusterCommands) reIP(options *DatabaseOptions, scName, primaryUpHos
 		}
 	}
 	if len(reIPList) > 0 {
-		return vcc.doReIP(options, scName, initiator, reIPHosts, reIPList)
+		return vcc.doReIP(options, scName, initiator, reIPHosts, reIPList, reloadSpread)
 	}
 	return nil
 }
@@ -288,7 +288,7 @@ func (vcc *VClusterCommands) reIP(options *DatabaseOptions, scName, primaryUpHos
 // 2. execute re-ip on a primary up host
 // 3. reload spread on a primary up host
 func (vcc *VClusterCommands) doReIP(options *DatabaseOptions, scName string,
-	initiator, reIPHosts []string, reIPList []ReIPInfo) error {
+	initiator, reIPHosts []string, reIPList []ReIPInfo, reloadSpread bool) error {
 	var instructions []clusterOp
 	nmaNetworkProfileOp := makeNMANetworkProfileOp(reIPHosts)
 	err := options.setUsePassword(vcc.Log)
@@ -304,13 +304,15 @@ func (vcc *VClusterCommands) doReIP(options *DatabaseOptions, scName string,
 		}
 		instructions = append(instructions, &httpsReIPOp)
 	}
-	// host is set to nil value in the reload spread step
-	// we use information from node information to find the up host later
-	httpsReloadSpreadOp, err := makeHTTPSReloadSpreadOpWithInitiator(initiator, options.usePassword, options.UserName, options.Password)
-	if err != nil {
-		return err
+	if reloadSpread {
+		// host is set to nil value in the reload spread step
+		// we use information from node information to find the up host later
+		httpsReloadSpreadOp, e := makeHTTPSReloadSpreadOpWithInitiator(initiator, options.usePassword, options.UserName, options.Password)
+		if e != nil {
+			return err
+		}
+		instructions = append(instructions, &httpsReloadSpreadOp)
 	}
-	instructions = append(instructions, &httpsReloadSpreadOp)
 	certs := httpsCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
 	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
 	err = clusterOpEngine.run(vcc.Log)
