@@ -27,10 +27,11 @@ import (
 // the database.
 type VRemoveNodeOptions struct {
 	DatabaseOptions
-	HostsToRemove []string // Hosts to remove from database
-	Initiator     string   // A primary up host that will be used to execute remove_node operations.
-	ForceDelete   bool     // whether force delete directories
-	IsSubcluster  bool     // is removing all nodes for a subcluster
+	HostsToRemove   []string // Hosts to remove from database
+	Initiator       string   // A primary up host that will be used to execute remove_node operations.
+	ForceDelete     bool     // whether force delete directories
+	IsSubcluster    bool     // is removing all nodes for a subcluster
+	NodesToPullSubs []string // Names of the nodes that need to have active subscription
 }
 
 func VRemoveNodeOptionsFactory() VRemoveNodeOptions {
@@ -360,9 +361,12 @@ func (vcc VClusterCommands) produceRemoveNodeInstructions(vdb *VCoordinationData
 		// Sandboxed nodes cannot be removed, so even if the database has sandboxes,
 		// polling subscriptions for the main cluster is enough
 		var nodesToPollSubs []string
-		getMainClusterNodes(vdb, options, &nodesToPollSubs)
+		if len(options.NodesToPullSubs) > 0 {
+			nodesToPollSubs = options.NodesToPullSubs
+		} else {
+			getMainClusterNodes(vdb, options, &nodesToPollSubs)
+		}
 		vcc.LogInfo("caitest vdb nodes", "nodes", vdb.HostList)
-		vcc.LogInfo("caitest nodes to remove", "nodes", options.HostsToRemove)
 		vcc.LogInfo("caitest nodesToPullSubs", "nodes", nodesToPollSubs)
 
 		httpsPollSubscriptionStateOp, e := makeHTTPSPollSubscriptionStateOp(initiatorHost,

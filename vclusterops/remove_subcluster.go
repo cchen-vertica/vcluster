@@ -36,7 +36,8 @@ type VRemoveScOptions struct {
 	NodeNameAddressMap map[string]string
 	// A primary up host in another subcluster that belongs to same cluster as the target subcluster.
 	// This option will be used to do re-ip in the cluster.
-	PrimaryUpHost string
+	PrimaryUpHost   string
+	NodesToPullSubs []string // Names of the nodes that need to have active subscription
 }
 
 func VRemoveScOptionsFactory() VRemoveScOptions {
@@ -191,6 +192,7 @@ func (vcc VClusterCommands) VRemoveSubcluster(removeScOpt *VRemoveScOptions) (VC
 		removeNodeOpt.HostsToRemove = hostsToRemove
 		removeNodeOpt.ForceDelete = removeScOpt.ForceDelete
 		removeNodeOpt.IsSubcluster = true
+		removeNodeOpt.NodesToPullSubs = removeScOpt.NodesToPullSubs
 
 		vcc.Log.PrintInfo("Removing nodes %q from subcluster %s",
 			hostsToRemove, removeScOpt.SCName)
