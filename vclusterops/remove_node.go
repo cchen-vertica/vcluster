@@ -27,11 +27,17 @@ import (
 // the database.
 type VRemoveNodeOptions struct {
 	DatabaseOptions
-	HostsToRemove   []string // Hosts to remove from database
-	Initiator       string   // A primary up host that will be used to execute remove_node operations.
-	ForceDelete     bool     // whether force delete directories
-	IsSubcluster    bool     // is removing all nodes for a subcluster
-	NodesToPullSubs []string // Names of the nodes that need to have active subscription
+	HostsToRemove []string // Hosts to remove from database
+	Initiator     string   // A primary up host that will be used to execute remove_node operations.
+	ForceDelete   bool     // whether force delete directories
+	IsSubcluster  bool     // is removing all nodes for a subcluster
+	// Names of the nodes that need to have active subscription. The user of vclusterOps needs
+	// to make sure the provided values are correct. This option will be used when some nodes
+	// cannot join the main cluster so we will only check the node subscription state for the nodes
+	// in this option. For example, after promote_sandbox, the nodes in old main cluster cannot
+	// join the new main cluster so we should only check the node subscription state on the nodes
+	// that are promoted from a sandbox.
+	NodesToPullSubs []string
 }
 
 func VRemoveNodeOptionsFactory() VRemoveNodeOptions {
@@ -357,7 +363,7 @@ func (vcc VClusterCommands) produceRemoveNodeInstructions(vdb *VCoordinationData
 			return instructions, err
 		}
 
-		// for Eon DB, we check whethter all subscriptions are ACTIVE after rebalance shards
+		// for Eon DB, we check whether all subscriptions are ACTIVE after rebalance shards
 		// Sandboxed nodes cannot be removed, so even if the database has sandboxes,
 		// polling subscriptions for the main cluster is enough
 		var nodesToPollSubs []string
@@ -366,8 +372,6 @@ func (vcc VClusterCommands) produceRemoveNodeInstructions(vdb *VCoordinationData
 		} else {
 			getMainClusterNodes(vdb, options, &nodesToPollSubs)
 		}
-		vcc.LogInfo("caitest vdb nodes", "nodes", vdb.HostList)
-		vcc.LogInfo("caitest nodesToPullSubs", "nodes", nodesToPollSubs)
 
 		httpsPollSubscriptionStateOp, e := makeHTTPSPollSubscriptionStateOp(initiatorHost,
 			usePassword, username, password, &nodesToPollSubs)
