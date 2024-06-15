@@ -46,7 +46,7 @@ func makeCmdInstallPackages() *cobra.Command {
 		newCmd,
 		installPkgSubCmd,
 		"Install default package(s) in database",
-		`This subcommand installs default packages in the database.
+		`This command installs default packages in the database.
 
 You must provide the --hosts option followed by all hosts in the database as a
 comma-separated list.
@@ -96,12 +96,14 @@ func (c *CmdInstallPackages) Parse(inputArgv []string, logger vlog.Printer) erro
 
 // all validations of the arguments should go in here
 func (c *CmdInstallPackages) validateParse() error {
-	err := c.getCertFilesFromCertPaths(&c.installPkgOpts.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.installPkgOpts.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 
-	err = c.ValidateParseBaseOptions(&c.installPkgOpts.DatabaseOptions)
+	err := c.ValidateParseBaseOptions(&c.installPkgOpts.DatabaseOptions)
 	if err != nil {
 		return err
 	}
@@ -117,7 +119,7 @@ func (c *CmdInstallPackages) Run(vcc vclusterops.ClusterCommands) error {
 
 	status, err := vcc.VInstallPackages(options)
 	if err != nil {
-		vcc.LogError(err, "failed to install the packages")
+		vcc.LogError(err, "fail to install the packages")
 		return err
 	}
 
@@ -129,7 +131,7 @@ func (c *CmdInstallPackages) Run(vcc vclusterops.ClusterCommands) error {
 
 	c.writeCmdOutputToFile(globals.file, bytes, vcc.GetLog())
 	vcc.LogInfo("Installed the packages: ", "packages", string(bytes))
-
+	vcc.DisplayInfo("Successfully installed packages")
 	return nil
 }
 

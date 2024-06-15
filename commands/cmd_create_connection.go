@@ -42,7 +42,7 @@ func makeCmdCreateConnection() *cobra.Command {
 		newCmd,
 		createConnectionSubCmd,
 		"create the content of the connection file",
-		`This subcommand is used to create the content of the connection file. 
+		`This command is used to create the content of the connection file. 
 
 You must specify the database name and host list. If the database has a 
 password, you need to provide password. If the database uses 
@@ -59,7 +59,7 @@ Examples:
 	// local flags
 	newCmd.setLocalFlags(cmd)
 
-	markFlagsRequired(cmd, []string{dbNameFlag, hostsFlag, connFlag})
+	markFlagsRequired(cmd, dbNameFlag, hostsFlag, connFlag)
 	return cmd
 }
 
@@ -112,7 +112,7 @@ func (c *CmdCreateConnection) Run(vcc vclusterops.ClusterCommands) error {
 	if err != nil {
 		return fmt.Errorf("fail to write connection file, details: %s", err)
 	}
-	fmt.Printf("Successfully write connection file in %s", globals.connFile)
+	vcc.DisplayInfo("Successfully wrote the connection file in %s", globals.connFile)
 	return nil
 }
 

@@ -16,8 +16,6 @@
 package commands
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 	"github.com/vertica/vcluster/vclusterops"
 	"github.com/vertica/vcluster/vclusterops/util"
@@ -46,7 +44,7 @@ func makeCmdCreateDB() *cobra.Command {
 		newCmd,
 		createDBSubCmd,
 		"Create a database",
-		`This subcommand creates a database on a set of hosts.
+		`This command creates a database on a set of hosts.
 
 You must specify the database name, host list, catalog path, and data path.
 
@@ -109,11 +107,7 @@ Examples:
 	newCmd.setHiddenFlags(cmd)
 
 	// require db-name
-	markFlagsRequired(cmd, []string{dbNameFlag})
-
-	// VER-92676: we may add a function setRequiredFlags() in cmd_base.go
-	// in which we can set catalog-path, data-path, ...
-	// then call that function in cmd_create_db and cmd_revive_db
+	markFlagsRequired(cmd, dbNameFlag, hostsFlag, catalogPathFlag, dataPathFlag)
 
 	return cmd
 }
@@ -200,6 +194,12 @@ func (c *CmdCreateDB) setLocalFlags(cmd *cobra.Command) {
 		"Force removal of existing directories before creating the database",
 	)
 	cmd.Flags().BoolVar(
+		&c.createDBOptions.ForceOverwriteFile,
+		"force-overwrite-file",
+		false,
+		"Force overwrite of existing config and config param files",
+	)
+	cmd.Flags().BoolVar(
 		&c.createDBOptions.SkipPackageInstall,
 		"skip-package-install",
 		false,
@@ -209,7 +209,7 @@ func (c *CmdCreateDB) setLocalFlags(cmd *cobra.Command) {
 		&c.createDBOptions.TimeoutNodeStartupSeconds,
 		"startup-timeout",
 		util.DefaultTimeoutSeconds,
-		"The timeout to wait for the nodes to start",
+		"The timeout in seconds to wait for the nodes to start",
 	)
 }
 
@@ -252,27 +252,45 @@ func (c *CmdCreateDB) validateParse(logger vlog.Printer) error {
 		return err
 	}
 
-	err = c.getCertFilesFromCertPaths(&c.createDBOptions.DatabaseOptions)
+	if !c.usePassword() {
+		err = c.getCertFilesFromCertPaths(&c.createDBOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
+	}
+
+	err = c.setDBPassword(&c.createDBOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
 
-	return c.setDBPassword(&c.createDBOptions.DatabaseOptions)
+	err = c.initConfigParam()
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *CmdCreateDB) Run(vcc vclusterops.ClusterCommands) error {
 	vcc.V(1).Info("Called method Run()")
 	vdb, createError := vcc.VCreateDatabase(c.createDBOptions)
 	if createError != nil {
+		vcc.LogError(createError, "fail to create database")
 		return createError
 	}
 
+	vcc.DisplayInfo("Successfully created a database with name [%s]", vdb.Name)
+
 	// write db info to vcluster config file
-	err := writeConfig(&vdb)
+	err := writeConfig(&vdb, c.createDBOptions.ForceOverwriteFile)
 	if err != nil {
-		fmt.Printf("Warning: Fail to write config file, details: %s\n", err)
+		vcc.DisplayWarning("Fail to write config file, details: %s\n", err)
 	}
-	vcc.PrintInfo("Created a database with name [%s]", vdb.Name)
+	// write config parameters to vcluster config param file
+	err = c.writeConfigParam(c.createDBOptions.ConfigurationParameters, c.createDBOptions.ForceOverwriteFile)
+	if err != nil {
+		vcc.DisplayWarning("fail to write config param file, details: %s", err)
+	}
 	return nil
 }
 

@@ -39,7 +39,7 @@ func makeCmdStopNode() *cobra.Command {
 		newCmd,
 		stopNodeCmd,
 		"Stop a list of node(s)",
-		`This subcommand stops a node or list or nodes from an existing database.
+		`This command stops a node or list or nodes from an existing database.
 
 You must provide the host list with the --stop-hosts option followed by 
 one or more hosts to stop as a comma-separated list.
@@ -60,7 +60,7 @@ Examples:
 	newCmd.setLocalFlags(cmd)
 
 	// require hosts to stop
-	markFlagsRequired(cmd, []string{stopNodeFlag})
+	markFlagsRequired(cmd, stopNodeFlag)
 	return cmd
 }
 
@@ -85,12 +85,14 @@ func (c *CmdStopNode) Parse(inputArgv []string, logger vlog.Printer) error {
 
 func (c *CmdStopNode) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()")
-	err := c.getCertFilesFromCertPaths(&c.stopNodeOptions.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.stopNodeOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 
-	err = c.ValidateParseBaseOptions(&c.stopNodeOptions.DatabaseOptions)
+	err := c.ValidateParseBaseOptions(&c.stopNodeOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
@@ -104,10 +106,10 @@ func (c *CmdStopNode) Run(vcc vclusterops.ClusterCommands) error {
 
 	err := vcc.VStopNode(options)
 	if err != nil {
-		vcc.LogError(err, "failed to stop the nodes", "Nodes", c.stopNodeOptions.StopHosts)
+		vcc.LogError(err, "fail to stop the nodes", "Nodes", c.stopNodeOptions.StopHosts)
 		return err
 	}
-	vcc.PrintInfo("Successfully stopped the nodes %v", c.stopNodeOptions.StopHosts)
+	vcc.DisplayInfo("Successfully stopped the nodes %v", c.stopNodeOptions.StopHosts)
 	return nil
 }
 

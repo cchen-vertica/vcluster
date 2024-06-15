@@ -49,10 +49,10 @@ func makeCmdStartDB() *cobra.Command {
 		newCmd,
 		startDBSubCmd,
 		"Start a database",
-		`This subcommand starts a database on a set of hosts.
+		`This command starts a database on a set of hosts.
 
-Starts Vertica on each host and establishes cluster quorum. This subcommand is 
-similar to restart_node, except start_db assumes that cluster quorum
+Starts Vertica on each host and establishes cluster quorum. This command is 
+similar to start_node, except start_db assumes that cluster quorum
 has been lost.
 
 The IP address provided for each node name must match the current IP address
@@ -172,16 +172,28 @@ func (c *CmdStartDB) Parse(inputArgv []string, logger vlog.Printer) error {
 func (c *CmdStartDB) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()", "command", startDBSubCmd)
 
-	err := c.getCertFilesFromCertPaths(&c.startDBOptions.DatabaseOptions)
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.startDBOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
+	}
+
+	err := c.ValidateParseBaseOptions(&c.startDBOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
 
-	err = c.ValidateParseBaseOptions(&c.startDBOptions.DatabaseOptions)
+	err = c.setDBPassword(&c.startDBOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
-	return c.setDBPassword(&c.startDBOptions.DatabaseOptions)
+
+	err = c.setConfigParam(&c.startDBOptions.DatabaseOptions)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 func filterInputHosts(options *vclusterops.VStartDatabaseOptions, dbConfig *DatabaseConfig) []string {
 	filteredHosts := []string{}
@@ -214,7 +226,7 @@ func (c *CmdStartDB) Run(vcc vclusterops.ClusterCommands) error {
 		}
 		options.FirstStartAfterRevive = dbConfig.FirstStartAfterRevive
 	} else {
-		vcc.PrintWarning("fail to read config file", "error", readConfigErr)
+		vcc.DisplayWarning("fail to read config file", "error", readConfigErr)
 		if options.MainCluster || options.Sandbox != util.MainClusterSandbox {
 			return fmt.Errorf("cannot start the database partially without config file")
 		}
@@ -222,30 +234,37 @@ func (c *CmdStartDB) Run(vcc vclusterops.ClusterCommands) error {
 
 	vdb, err := vcc.VStartDatabase(options)
 	if err != nil {
-		vcc.LogError(err, "failed to start the database")
+		vcc.LogError(err, "fail to start the database")
 		return err
 	}
+
 	msg := fmt.Sprintf("Started database %s", options.DBName)
 	if options.Sandbox != "" {
 		sandboxMsg := fmt.Sprintf(" on sandbox %s", options.Sandbox)
-		vcc.PrintInfo(msg + sandboxMsg)
+		vcc.DisplayInfo(msg + sandboxMsg)
 		return nil
 	}
 	if options.MainCluster {
 		startMsg := " on the main cluster"
-		vcc.PrintInfo(msg + startMsg)
+		vcc.DisplayInfo(msg + startMsg)
 		return nil
 	}
-	vcc.PrintInfo(msg)
+	vcc.DisplayInfo(msg)
 
 	// for Eon database, update config file to fill nodes' subcluster information
 	if readConfigErr == nil && options.IsEon {
 		// write db info to vcluster config file
 		vdb.FirstStartAfterRevive = false
-		err := writeConfig(vdb)
+		err = writeConfig(vdb, true /*forceOverwrite*/)
 		if err != nil {
-			vcc.PrintWarning("fail to update config file, details: %s", err)
+			vcc.DisplayWarning("fail to update config file, details: %s", err)
 		}
+	}
+
+	// write config parameters to vcluster config param file
+	err = c.writeConfigParam(options.ConfigurationParameters, true /*forceOverwrite*/)
+	if err != nil {
+		vcc.PrintWarning("fail to write config param file, details: %s", err)
 	}
 
 	return nil

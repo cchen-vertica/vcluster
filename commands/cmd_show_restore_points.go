@@ -42,7 +42,7 @@ func makeCmdShowRestorePoints() *cobra.Command {
 		newCmd,
 		showRestorePointsSubCmd,
 		"Query and list restore point(s) in archive(s)",
-		`This subcommand queries and displays restore points in archives.
+		`This command queries and displays restore points in archives.
 
 The --start-timestamp and --end-timestamp options limit the restore points
 query by creation timestamp. Both options accept UTC timestamps in date-time
@@ -138,16 +138,27 @@ func (c *CmdShowRestorePoints) Parse(inputArgv []string, logger vlog.Printer) er
 func (c *CmdShowRestorePoints) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()")
 
-	err := c.getCertFilesFromCertPaths(&c.showRestorePointsOptions.DatabaseOptions)
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.showRestorePointsOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
+	}
+
+	err := c.ValidateParseBaseOptions(&c.showRestorePointsOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
 
-	err = c.ValidateParseBaseOptions(&c.showRestorePointsOptions.DatabaseOptions)
+	err = c.setDBPassword(&c.showRestorePointsOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
-	return c.setDBPassword(&c.showRestorePointsOptions.DatabaseOptions)
+	err = c.setConfigParam(&c.showRestorePointsOptions.DatabaseOptions)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *CmdShowRestorePoints) Analyze(logger vlog.Printer) error {
@@ -171,7 +182,7 @@ func (c *CmdShowRestorePoints) Run(vcc vclusterops.ClusterCommands) error {
 	}
 	c.writeCmdOutputToFile(globals.file, bytes, vcc.GetLog())
 
-	vcc.PrintInfo("Successfully show restore points %v in database %s", restorePoints, options.DBName)
+	vcc.DisplayInfo("Successfully showed restore points %v in database %s", restorePoints, options.DBName)
 	return nil
 }
 

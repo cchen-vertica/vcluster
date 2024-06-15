@@ -94,7 +94,7 @@ Examples:
 	// local flags
 	newCmd.setLocalFlags(cmd)
 
-	// either target dbname/hosts or connection file must be provided
+	// either target dbname+hosts or connection file must be provided
 	cmd.MarkFlagsOneRequired(targetConnFlag, targetDBNameFlag)
 	cmd.MarkFlagsOneRequired(targetConnFlag, targetHostsFlag)
 
@@ -139,7 +139,11 @@ func (c *CmdStartReplication) setLocalFlags(cmd *cobra.Command) {
 		&globals.connFile,
 		targetConnFlag,
 		"",
-		"Path to the connection file")
+		"[Required] The connection file created with the create_connection command, "+
+			"containing the database name, hosts, and password (if any) for the target database. "+
+			"Alternatively, you can provide this information manually with --target-db-name, "+
+			"--target-hosts, and --target-password-file",
+	)
 	markFlagsFileName(cmd, map[string][]string{targetConnFlag: {"yaml"}})
 	//  password flags
 	cmd.Flags().StringVar(
@@ -171,11 +175,13 @@ func (c *CmdStartReplication) Parse(inputArgv []string, logger vlog.Printer) err
 // all validations of the arguments should go in here
 func (c *CmdStartReplication) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()")
-	err := c.getCertFilesFromCertPaths(&c.startRepOptions.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.startRepOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
-	err = c.parseTargetHostList()
+	err := c.parseTargetHostList()
 	if err != nil {
 		return err
 	}
@@ -235,7 +241,7 @@ func (c *CmdStartReplication) Run(vcc vclusterops.ClusterCommands) error {
 		vcc.LogError(err, "fail to replicate to database", "targetDB", options.TargetDB)
 		return err
 	}
-	vcc.PrintInfo("Successfully replicate to database %s", options.TargetDB)
+	vcc.DisplayInfo("Successfully replicated to database %s", options.TargetDB)
 	return nil
 }
 

@@ -44,7 +44,7 @@ func makeListAllNodes() *cobra.Command {
 		newCmd,
 		listAllNodesSubCmd,
 		"List all nodes in the database",
-		`This subcommand queries the status of the nodes in the database and prints
+		`This command queries the status of the nodes in the database and prints
 whether they are up or down.
 
 To provide its status, each host must run the spread daemon.
@@ -85,12 +85,14 @@ func (c *CmdListAllNodes) Parse(inputArgv []string, logger vlog.Printer) error {
 
 func (c *CmdListAllNodes) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()", "command", listAllNodesSubCmd)
-	err := c.getCertFilesFromCertPaths(&c.fetchNodeStateOptions.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.fetchNodeStateOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 
-	err = c.ValidateParseBaseOptions(&c.fetchNodeStateOptions.DatabaseOptions)
+	err := c.ValidateParseBaseOptions(&c.fetchNodeStateOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
@@ -105,7 +107,7 @@ func (c *CmdListAllNodes) Run(vcc vclusterops.ClusterCommands) error {
 		// if all nodes are down, the nodeStates list is not empty
 		// for this case, we don't want to show errors but show DOWN for the nodes
 		if len(nodeStates) == 0 {
-			vcc.PrintError("fail to list all nodes: %s", err)
+			vcc.LogError(err, "fail to list all nodes")
 			return err
 		}
 	}
@@ -117,6 +119,7 @@ func (c *CmdListAllNodes) Run(vcc vclusterops.ClusterCommands) error {
 
 	c.writeCmdOutputToFile(globals.file, bytes, vcc.GetLog())
 	vcc.LogInfo("Node states: ", "nodeStates", string(bytes))
+	vcc.DisplayInfo("Successfully listed all nodes")
 	return nil
 }
 

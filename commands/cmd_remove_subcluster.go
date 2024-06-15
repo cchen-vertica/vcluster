@@ -42,7 +42,7 @@ func makeCmdRemoveSubcluster() *cobra.Command {
 		newCmd,
 		removeSCSubCmd,
 		"Remove a subcluster",
-		`This subcommand removes a subcluster from an existing Eon Mode database.
+		`This command removes a subcluster from an existing Eon Mode database.
 
 You must provide the subcluster name with the --subcluster option.
 
@@ -66,7 +66,7 @@ Examples:
 	newCmd.setLocalFlags(cmd)
 
 	// require name of subcluster to remove
-	markFlagsRequired(cmd, []string{subclusterFlag})
+	markFlagsRequired(cmd, subclusterFlag)
 
 	// hide eon mode flag since we expect it to come from config file, not from user input
 	hideLocalFlags(cmd, []string{eonModeFlag})
@@ -81,12 +81,6 @@ func (c *CmdRemoveSubcluster) setLocalFlags(cmd *cobra.Command) {
 		subclusterFlag,
 		"",
 		"Name of subcluster to be removed",
-	)
-	cmd.Flags().BoolVar(
-		&c.removeScOptions.ForceDelete,
-		"force-delete",
-		true,
-		"Whether force delete directories if they are not empty",
 	)
 }
 
@@ -107,12 +101,14 @@ func (c *CmdRemoveSubcluster) Parse(inputArgv []string, logger vlog.Printer) err
 
 func (c *CmdRemoveSubcluster) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()")
-	err := c.getCertFilesFromCertPaths(&c.removeScOptions.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.removeScOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 
-	err = c.ValidateParseBaseOptions(&c.removeScOptions.DatabaseOptions)
+	err := c.ValidateParseBaseOptions(&c.removeScOptions.DatabaseOptions)
 	if err != nil {
 		return nil
 	}
@@ -130,16 +126,18 @@ func (c *CmdRemoveSubcluster) Run(vcc vclusterops.ClusterCommands) error {
 
 	vdb, err := vcc.VRemoveSubcluster(options)
 	if err != nil {
+		vcc.LogError(err, "fail to remove subcluster")
 		return err
 	}
 
-	// write db info to vcluster config file
-	err = writeConfig(&vdb)
-	if err != nil {
-		vcc.PrintWarning("fail to write config file, details: %s", err)
-	}
-	vcc.PrintInfo("Successfully removed subcluster %s from database %s",
+	vcc.DisplayInfo("Successfully removed subcluster %s from database %s",
 		options.SCName, options.DBName)
+
+	// write db info to vcluster config file
+	err = writeConfig(&vdb, true /*forceOverwrite*/)
+	if err != nil {
+		vcc.DisplayWarning("fail to write config file, details: %s", err)
+	}
 
 	return nil
 }

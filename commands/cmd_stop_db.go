@@ -48,7 +48,7 @@ func makeCmdStopDB() *cobra.Command {
 		newCmd,
 		stopDBSubCmd,
 		"Stop a database",
-		`This subcommand stops a database or sandbox.
+		`This command stops a database or sandbox.
 
 Examples:
   # Stop a database with config file using password authentication
@@ -129,12 +129,14 @@ func (c *CmdStopDB) Parse(inputArgv []string, logger vlog.Printer) error {
 // all validations of the arguments should go in here
 func (c *CmdStopDB) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()")
-	err := c.getCertFilesFromCertPaths(&c.stopDBOptions.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.stopDBOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 
-	err = c.ValidateParseBaseOptions(&c.stopDBOptions.DatabaseOptions)
+	err := c.ValidateParseBaseOptions(&c.stopDBOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
@@ -148,21 +150,21 @@ func (c *CmdStopDB) Run(vcc vclusterops.ClusterCommands) error {
 
 	err := vcc.VStopDatabase(options)
 	if err != nil {
-		vcc.LogError(err, "failed to stop the database")
+		vcc.LogError(err, "fail to stop the database")
 		return err
 	}
-	msg := fmt.Sprintf("Stopped a database with name %s", options.DBName)
+	msg := fmt.Sprintf("Successfully stopped a database with name %s", options.DBName)
 	if options.SandboxName != "" {
 		sandboxMsg := fmt.Sprintf(" on sandbox %s", options.SandboxName)
-		vcc.PrintInfo(msg + sandboxMsg)
+		vcc.DisplayInfo(msg + sandboxMsg)
 		return nil
 	}
 	if options.MainCluster {
 		stopMsg := " on main cluster"
-		vcc.PrintInfo(msg + stopMsg)
+		vcc.DisplayInfo(msg + stopMsg)
 		return nil
 	}
-	vcc.PrintInfo(msg)
+	vcc.DisplayInfo(msg)
 	return nil
 }
 

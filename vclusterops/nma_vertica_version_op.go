@@ -349,7 +349,7 @@ func (op *nmaVerticaVersionOp) prepareHostNodeMap(execContext *opEngineExecConte
 }
 
 // prepareHostNodeMapWithVDB is a helper to make a host-node map for all nodes in the
-// subclusters of target nodes'
+// subclusters of target nodes
 func (op *nmaVerticaVersionOp) prepareHostNodeMapWithVDB() (vHostNodeMap, error) {
 	if len(op.targetNodeIPs) == 0 {
 		return op.vdb.HostNodeMap, nil
@@ -372,7 +372,7 @@ func (op *nmaVerticaVersionOp) prepareHostNodeMapWithVDB() (vHostNodeMap, error)
 }
 
 // findHostsInTargetSubclusters is a helper function to get all hosts in the subclusters of
-// target nodes'. The parameters of this function are two maps:
+// target nodes. The parameters of this function are two maps:
 // 1. host-subcluster map for the entire database
 // 2. subcluster-hosts map for the entire database
 func (op *nmaVerticaVersionOp) findHostsInTargetSubclusters(hostSCMap map[string]string,

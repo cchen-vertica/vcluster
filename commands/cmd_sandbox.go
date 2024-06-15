@@ -49,7 +49,7 @@ func makeCmdSandboxSubcluster() *cobra.Command {
 		newCmd,
 		sandboxSubCmd,
 		"Sandbox a subcluster",
-		`This subcommand sandboxes a subcluster in an existing Eon Mode database.
+		`This command sandboxes a subcluster in an existing Eon Mode database.
 
 Only secondary subclusters can be sandboxed. All hosts in the subcluster that
 you want to sandbox must be up.
@@ -76,7 +76,7 @@ Examples:
 	newCmd.setLocalFlags(cmd)
 
 	// require name of subcluster to sandbox as well as the sandbox name
-	markFlagsRequired(cmd, []string{subclusterFlag, sandboxFlag})
+	markFlagsRequired(cmd, subclusterFlag, sandboxFlag)
 
 	return cmd
 }
@@ -95,6 +95,24 @@ func (c *CmdSandboxSubcluster) setLocalFlags(cmd *cobra.Command) {
 		"",
 		"The name of the sandbox",
 	)
+	cmd.Flags().BoolVar(
+		&c.sbOptions.SaveRp,
+		saveRpFlag,
+		false,
+		"A restore point is saved when creating the sandbox",
+	)
+	cmd.Flags().BoolVar(
+		&c.sbOptions.Imeta,
+		isolateMetadataFlag,
+		false,
+		"The metadata of sandboxed subcluster is isolated",
+	)
+	cmd.Flags().BoolVar(
+		&c.sbOptions.Sls,
+		createStorageLocationsFlag,
+		false,
+		"The sandbox create its own storage locations",
+	)
 }
 
 func (c *CmdSandboxSubcluster) Parse(inputArgv []string, logger vlog.Printer) error {
@@ -107,12 +125,14 @@ func (c *CmdSandboxSubcluster) Parse(inputArgv []string, logger vlog.Printer) er
 func (c *CmdSandboxSubcluster) parseInternal(logger vlog.Printer) error {
 	logger.Info("Called parseInternal()")
 
-	err := c.getCertFilesFromCertPaths(&c.sbOptions.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.sbOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 
-	err = c.ValidateParseBaseOptions(&c.sbOptions.DatabaseOptions)
+	err := c.ValidateParseBaseOptions(&c.sbOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
@@ -125,34 +145,34 @@ func (c *CmdSandboxSubcluster) Analyze(logger vlog.Printer) error {
 }
 
 func (c *CmdSandboxSubcluster) Run(vcc vclusterops.ClusterCommands) error {
-	vcc.PrintInfo("Running sandbox subcluster")
 	vcc.LogInfo("Calling method Run() for command " + sandboxSubCmd)
 
 	options := c.sbOptions
 
 	err := vcc.VSandbox(&options)
 	if err != nil {
+		vcc.LogError(err, "fail to sandbox subcluster")
 		return err
 	}
 
-	defer vcc.PrintInfo("Successfully sandboxed subcluster " + c.sbOptions.SCName + " as " + c.sbOptions.SandboxName)
+	defer vcc.DisplayInfo("Successfully sandboxed subcluster " + c.sbOptions.SCName + " as " + c.sbOptions.SandboxName)
 	// Read and then update the sandbox information on config file
 	dbConfig, configErr := readConfig()
 	if configErr != nil {
-		vcc.PrintWarning("fail to read config file, skipping config file update", "error", configErr)
+		vcc.DisplayWarning("fail to read config file, skipping config file update", "error", configErr)
 		return nil
 	}
 	// Update config
 	updatedConfig := c.updateSandboxInfo(dbConfig)
 	if !updatedConfig {
-		vcc.PrintWarning("did not update node info for sandboxed sc " + c.sbOptions.SCName +
+		vcc.DisplayWarning("did not update node info for sandboxed sc " + c.sbOptions.SCName +
 			", info about the subcluster nodes are missing in config file, skipping config update")
 		return nil
 	}
 
-	writeErr := dbConfig.write(options.ConfigPath)
+	writeErr := dbConfig.write(options.ConfigPath, true /*forceOverwrite*/)
 	if writeErr != nil {
-		vcc.PrintWarning("fail to write the config file, details: " + writeErr.Error())
+		vcc.DisplayWarning("fail to write the config file, details: " + writeErr.Error())
 		return nil
 	}
 	return nil

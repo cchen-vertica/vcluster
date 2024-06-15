@@ -86,7 +86,7 @@ func makeCmdScrutinize() *cobra.Command {
 		newCmd,
 		scrutinizeSubCmd,
 		"Scrutinize a database",
-		`This subcommand runs scrutinize to collect diagnostic information about a
+		`This command runs scrutinize to collect diagnostic information about a
 database.
 		
 Vertica support might request that you run scrutinize when resolving a support
@@ -194,7 +194,6 @@ func (c *CmdScrutinize) setLocalFlags(cmd *cobra.Command) {
 }
 
 func (c *CmdScrutinize) Parse(inputArgv []string, logger vlog.Printer) error {
-	logger.PrintInfo("Parsing scrutinize command input")
 	c.argv = inputArgv
 	logger.LogMaskedArgParse(c.argv)
 	// for some options, we do not want to use their default values,
@@ -219,13 +218,15 @@ func (c *CmdScrutinize) Parse(inputArgv []string, logger vlog.Printer) error {
 // all validations of the arguments should go in here
 func (c *CmdScrutinize) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()")
-	err := c.getCertFilesFromCertPaths(&c.sOptions.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.sOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 
 	// parses host list and ipv6 - eon is irrelevant but handled
-	err = c.ValidateParseBaseOptions(&c.sOptions.DatabaseOptions)
+	err := c.ValidateParseBaseOptions(&c.sOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
@@ -233,7 +234,6 @@ func (c *CmdScrutinize) validateParse(logger vlog.Printer) error {
 }
 
 func (c *CmdScrutinize) Run(vcc vclusterops.ClusterCommands) error {
-	vcc.PrintInfo("Running scrutinize") // TODO remove when no longer needed for tests
 	vcc.LogInfo("Calling method Run()")
 
 	// Read the password from a secret
@@ -259,7 +259,7 @@ func (c *CmdScrutinize) Run(vcc vclusterops.ClusterCommands) error {
 		vcc.LogError(err, "scrutinize run failed")
 		return err
 	}
-	vcc.PrintInfo("Successfully completed scrutinize run for the database %s", c.sOptions.DBName)
+	vcc.DisplayInfo("Successfully completed scrutinize run for the database %s", c.sOptions.DBName)
 	return err
 }
 
@@ -481,7 +481,7 @@ func (c *CmdScrutinize) validateTarballName(logger vlog.Printer) {
 	if re.MatchString(c.sOptions.TarballName) {
 		return
 	}
-	logger.PrintWarning("The tarball name does not match GRASP regex VerticaScrutinize.yyyymmddhhmmss")
+	logger.DisplayWarning("The tarball name does not match GRASP regex VerticaScrutinize.yyyymmddhhmmss")
 }
 
 // readNonEmptyFile is a helper that reads the contents of a file into a string.

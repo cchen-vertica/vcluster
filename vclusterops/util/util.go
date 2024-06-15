@@ -96,6 +96,13 @@ func CheckNotEmpty(a string) bool {
 	return a != ""
 }
 
+func BoolToStr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
 func CheckAllEmptyOrNonEmpty(vars ...string) bool {
 	// Initialize flags for empty and non-empty conditions
 	allEmpty := true
@@ -654,3 +661,5 @@ func FillInDefaultTimeForEndTimestamp(dateonly *string) *time.Time {
 func IsTimeEqualOrAfter(start, end time.Time) bool {
 	return end.Equal(start) || end.After(start)
 }
+
+const EmptyConfigParamErrMsg = "configuration parameter must not be empty"

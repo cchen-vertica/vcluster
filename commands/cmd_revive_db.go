@@ -43,7 +43,7 @@ func makeCmdReviveDB() *cobra.Command {
 		newCmd,
 		reviveDBSubCmd,
 		"Revive a database",
-		`This subcommand revives an Eon Mode database on the specified hosts or restores
+		`This command revives an Eon Mode database on the specified hosts or restores
 an Eon Mode database to the specified restore point.
 
 The --communal-storage-location option is required. If access to communal
@@ -86,7 +86,7 @@ Examples:
 	newCmd.setLocalFlags(cmd)
 
 	// require db-name and communal-storage-location
-	markFlagsRequired(cmd, []string{dbNameFlag, communalStorageLocationFlag})
+	markFlagsRequired(cmd, dbNameFlag, communalStorageLocationFlag)
 
 	return cmd
 }
@@ -152,9 +152,11 @@ func (c *CmdReviveDB) Parse(inputArgv []string, logger vlog.Printer) error {
 func (c *CmdReviveDB) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()")
 
-	err := c.getCertFilesFromCertPaths(&c.reviveDBOptions.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.reviveDBOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 
 	// when --display-only is provided, we do not need to parse some base options like hostListStr
@@ -162,7 +164,16 @@ func (c *CmdReviveDB) validateParse(logger vlog.Printer) error {
 		return nil
 	}
 
-	return c.ValidateParseBaseOptions(&c.reviveDBOptions.DatabaseOptions)
+	err := c.ValidateParseBaseOptions(&c.reviveDBOptions.DatabaseOptions)
+	if err != nil {
+		return err
+	}
+
+	err = c.setConfigParam(&c.reviveDBOptions.DatabaseOptions)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *CmdReviveDB) Run(vcc vclusterops.ClusterCommands) error {
@@ -179,15 +190,20 @@ func (c *CmdReviveDB) Run(vcc vclusterops.ClusterCommands) error {
 		return nil
 	}
 
+	vcc.DisplayInfo("Successfully revived database %s", c.reviveDBOptions.DBName)
+
 	// write db info to vcluster config file
 	vdb.FirstStartAfterRevive = true
-	err = writeConfig(vdb)
+	err = writeConfig(vdb, true /*forceOverwrite*/)
 	if err != nil {
-		vcc.PrintWarning("fail to write config file, details: %s", err)
+		vcc.DisplayWarning("fail to write config file, details: %s", err)
 	}
 
-	vcc.PrintInfo("Successfully revived database %s", c.reviveDBOptions.DBName)
-
+	// write config parameters to vcluster config param file
+	err = c.writeConfigParam(c.reviveDBOptions.ConfigurationParameters, true /*forceOverwrite*/)
+	if err != nil {
+		vcc.DisplayWarning("fail to write config param file, details: %s", err)
+	}
 	return nil
 }
 

@@ -70,7 +70,7 @@ Examples:
 	)
 
 	// require db-name, hosts, catalog-path, and data-path
-	markFlagsRequired(cmd, []string{dbNameFlag, hostsFlag, catalogPathFlag})
+	markFlagsRequired(cmd, dbNameFlag, hostsFlag, catalogPathFlag)
 
 	// local flags
 	newCmd.setLocalFlags(cmd)
@@ -115,16 +115,16 @@ func (c *CmdConfigRecover) validateParse(logger vlog.Printer) error {
 func (c *CmdConfigRecover) Run(vcc vclusterops.ClusterCommands) error {
 	vdb, err := vcc.VFetchCoordinationDatabase(c.recoverConfigOptions)
 	if err != nil {
-		vcc.LogError(err, "failed to recover the config file")
+		vcc.LogError(err, "fail to recover the config file")
 		return err
 	}
 	// write db info to vcluster config file
 	vdb.FirstStartAfterRevive = c.recoverConfigOptions.AfterRevive
-	err = writeConfig(&vdb)
+	err = writeConfig(&vdb, true /*forceOverwrite*/)
 	if err != nil {
 		return fmt.Errorf("fail to write config file, details: %s", err)
 	}
-	vcc.PrintInfo("Recovered config file for database %s at %s", vdb.Name,
+	vcc.DisplayInfo("Successfully recovered config file for database %s at %s", vdb.Name,
 		c.recoverConfigOptions.ConfigPath)
 
 	return nil

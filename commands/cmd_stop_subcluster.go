@@ -47,7 +47,7 @@ func makeCmdStopSubcluster() *cobra.Command {
 		newCmd,
 		stopSCSubCmd,
 		"Stop a subcluster",
-		`This subcommand stops a subcluster from an existing Eon Mode database.
+		`This command stops a subcluster from an existing Eon Mode database.
 
 You must provide the subcluster name with the --subcluster option.
 
@@ -77,7 +77,7 @@ Examples:
 	newCmd.setLocalFlags(cmd)
 
 	// require name of subcluster to add
-	markFlagsRequired(cmd, []string{subclusterFlag})
+	markFlagsRequired(cmd, subclusterFlag)
 
 	// hide eon mode flag since we expect it to come from config file, not from user input
 	hideLocalFlags(cmd, []string{eonModeFlag})
@@ -130,12 +130,14 @@ func (c *CmdStopSubcluster) Parse(inputArgv []string, logger vlog.Printer) error
 
 func (c *CmdStopSubcluster) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()")
-	err := c.getCertFilesFromCertPaths(&c.stopSCOptions.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.stopSCOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 
-	err = c.ValidateParseBaseOptions(&c.stopSCOptions.DatabaseOptions)
+	err := c.ValidateParseBaseOptions(&c.stopSCOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
@@ -149,10 +151,10 @@ func (c *CmdStopSubcluster) Run(vcc vclusterops.ClusterCommands) error {
 
 	err := vcc.VStopSubcluster(options)
 	if err != nil {
-		vcc.LogError(err, "failed to stop the subcluster", "Subcluster", options.SCName)
+		vcc.LogError(err, "fail to stop the subcluster", "Subcluster", options.SCName)
 		return err
 	}
-	vcc.PrintInfo("Successfully stopped subcluster %s", options.SCName)
+	vcc.DisplayInfo("Successfully stopped subcluster %s", options.SCName)
 	return nil
 }
 

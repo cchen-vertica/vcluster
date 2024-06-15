@@ -41,7 +41,7 @@ func makeCmdDropDB() *cobra.Command {
 		newCmd,
 		dropDBSubCmd,
 		"Drop a database",
-		`This subcommand drops a stopped database.
+		`This command drops a stopped database.
 
 For an Eon database, communal storage is not deleted. You can recover 
 the dropped database with revive_db.
@@ -66,23 +66,10 @@ Examples:
 		[]string{dbNameFlag, configFlag, hostsFlag, ipv6Flag, catalogPathFlag, dataPathFlag, depotPathFlag},
 	)
 
-	// local flags
-	newCmd.setLocalFlags(cmd)
-
 	// hide flags since we expect it to come from config file, not from user input
 	hideLocalFlags(cmd, []string{hostsFlag, catalogPathFlag, dataPathFlag, depotPathFlag})
 
 	return cmd
-}
-
-// setLocalFlags will set the local flags the command has
-func (c *CmdDropDB) setLocalFlags(cmd *cobra.Command) {
-	cmd.Flags().BoolVar(
-		&c.dropDBOptions.ForceDelete,
-		"force-delete",
-		false,
-		"Delete local directories like catalog, depot, and data.",
-	)
 }
 
 func (c *CmdDropDB) Parse(inputArgv []string, logger vlog.Printer) error {
@@ -94,9 +81,11 @@ func (c *CmdDropDB) Parse(inputArgv []string, logger vlog.Printer) error {
 
 func (c *CmdDropDB) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()")
-	err := c.getCertFilesFromCertPaths(&c.dropDBOptions.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.dropDBOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 	return c.ValidateParseBaseOptions(&c.dropDBOptions.DatabaseOptions)
 }
@@ -106,17 +95,17 @@ func (c *CmdDropDB) Run(vcc vclusterops.ClusterCommands) error {
 
 	err := vcc.VDropDatabase(c.dropDBOptions)
 	if err != nil {
-		vcc.LogError(err, "failed do drop the database")
+		vcc.LogError(err, "fail do drop the database")
 		return err
 	}
 
-	vcc.PrintInfo("Successfully dropped database %s", c.dropDBOptions.DBName)
+	vcc.DisplayInfo("Successfully dropped database %s", c.dropDBOptions.DBName)
 	// if the database is successfully dropped, the config file will be removed
 	// if failed to remove it, we will ask users to manually do it
 	err = removeConfig()
 	if err != nil {
-		vcc.PrintWarning("Fail to remove config file %q, "+
-			"please manually do it. Details: %v", c.dropDBOptions.ConfigPath, err)
+		vcc.DisplayWarning("Fail to remove config file %q, "+
+			"please manually do it, details: %v", c.dropDBOptions.ConfigPath, err)
 	}
 	return nil
 }

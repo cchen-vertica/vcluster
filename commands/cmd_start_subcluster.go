@@ -43,7 +43,7 @@ func makeCmdStartSubcluster() *cobra.Command {
 		newCmd,
 		startSCSubCmd,
 		"Start a subcluster",
-		`This subcommand starts a stopped subcluster in a running Eon database.
+		`This command starts a stopped subcluster in a running Eon database.
 
 You must provide the subcluster name with the --subcluster option.
 
@@ -63,7 +63,7 @@ Examples:
 	newCmd.setLocalFlags(cmd)
 
 	// require name of subcluster to start
-	markFlagsRequired(cmd, []string{subclusterFlag})
+	markFlagsRequired(cmd, subclusterFlag)
 
 	// hide eon mode flag since we expect it to come from config file, not from user input
 	hideLocalFlags(cmd, []string{eonModeFlag})
@@ -104,12 +104,14 @@ func (c *CmdStartSubcluster) Parse(inputArgv []string, logger vlog.Printer) erro
 
 func (c *CmdStartSubcluster) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()")
-	err := c.getCertFilesFromCertPaths(&c.startScOptions.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.startScOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 
-	err = c.ValidateParseBaseOptions(&c.startScOptions.DatabaseOptions)
+	err := c.ValidateParseBaseOptions(&c.startScOptions.DatabaseOptions)
 	if err != nil {
 		return nil
 	}
@@ -127,10 +129,11 @@ func (c *CmdStartSubcluster) Run(vcc vclusterops.ClusterCommands) error {
 
 	err := vcc.VStartSubcluster(options)
 	if err != nil {
+		vcc.LogError(err, "fail to start subcluster")
 		return err
 	}
 
-	vcc.PrintInfo("Successfully started subcluster %s for database %s",
+	vcc.DisplayInfo("Successfully started subcluster %s for database %s",
 		options.SCName, options.DBName)
 
 	return nil

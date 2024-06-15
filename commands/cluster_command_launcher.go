@@ -59,6 +59,8 @@ const (
 	eonModeKey                  = "eonMode"
 	configParamFlag             = "config-param"
 	configParamKey              = "configParam"
+	configParamFileFlag         = "config-param-file"
+	configParamFileKey          = "configParamFile"
 	logPathFlag                 = "log-path"
 	logPathKey                  = "logPath"
 	keyFileFlag                 = "key-file"
@@ -80,13 +82,17 @@ const (
 	subclusterFlag              = "subcluster"
 	addNodeFlag                 = "new-hosts"
 	sandboxFlag                 = "sandbox"
+	saveRpFlag                  = "save-restore-point"
+	isolateMetadataFlag         = "isolate-metadata"
+	createStorageLocationsFlag  = "create-storage-locations"
 	sandboxKey                  = "sandbox"
 	connFlag                    = "conn"
 	connKey                     = "conn"
 	stopNodeFlag                = "stop-hosts"
-	// VER-90436: restart -> start
-	startNodeFlag = "restart"
-	startHostFlag = "start-hosts"
+	reIPFileFlag                = "re-ip-file"
+	removeNodeFlag              = "remove"
+	startNodeFlag               = "start"
+	startHostFlag               = "start-hosts"
 )
 
 // Flag and key for database replication
@@ -162,7 +168,7 @@ const (
 	startSCSubCmd           = "start_subcluster"
 	stopNodeCmd             = "stop_node"
 	removeNodeSubCmd        = "remove_node"
-	restartNodeSubCmd       = "restart_node"
+	startNodeSubCmd         = "start_node"
 	reIPSubCmd              = "re_ip"
 	sandboxSubCmd           = "sandbox_subcluster"
 	unsandboxSubCmd         = "unsandbox_subcluster"
@@ -520,7 +526,7 @@ func constructCmds() []*cobra.Command {
 		makeCmdSandboxSubcluster(),
 		makeCmdUnsandboxSubcluster(),
 		// node-scope cmds
-		makeCmdRestartNodes(),
+		makeCmdStartNodes(),
 		makeCmdAddNode(),
 		makeCmdStopNode(),
 		makeCmdRemoveNode(),
@@ -542,12 +548,30 @@ func hideLocalFlags(cmd *cobra.Command, flags []string) {
 	}
 }
 
-// markFlagsRequired will mark local flags as required
-func markFlagsRequired(cmd *cobra.Command, flags []string) {
+// markFlagsRequired marks given flags as required
+func markFlagsRequired(cmd *cobra.Command, flags ...string) {
 	for _, flag := range flags {
 		err := cmd.MarkFlagRequired(flag)
 		if err != nil {
 			fmt.Printf("Warning: fail to mark flag %q required, details: %v\n", flag, err)
+		}
+
+		// emphasize [Required] in the help message
+		f := cmd.Flags().Lookup(flag)
+		if f != nil { // empty flag means not found
+			f.Usage = "[Required] " + f.Usage
+		}
+	}
+}
+
+// markFlagsOneRequired marks one of the given flags as required
+func markFlagsOneRequired(cmd *cobra.Command, flags []string) {
+	cmd.MarkFlagsOneRequired(flags...)
+	for _, flag := range flags {
+		f := cmd.Flags().Lookup(flag)
+		if f != nil { // empty flag means not found
+			oneRequiredGroup := f.Annotations["cobra_annotation_one_required"]
+			f.Usage = fmt.Sprintf("(One of %v is required) ", oneRequiredGroup) + f.Usage
 		}
 	}
 }

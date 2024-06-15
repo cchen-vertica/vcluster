@@ -1,8 +1,10 @@
 package vclusterops
 
 import (
+	"errors"
 	"fmt"
 
+	"github.com/vertica/vcluster/rfc7807"
 	"github.com/vertica/vcluster/vclusterops/util"
 )
 
@@ -71,6 +73,15 @@ func (vcc VClusterCommands) VFetchNodeState(options *VFetchNodeStateOptions) ([]
 	err = vcc.getVDBFromRunningDBIncludeSandbox(&vdb, &options.DatabaseOptions, util.MainClusterSandbox)
 	if err != nil {
 		vcc.Log.PrintInfo("Error from vdb build: %s", err.Error())
+
+		rfcError := &rfc7807.VProblem{}
+		ok := errors.As(err, &rfcError)
+		if ok {
+			if rfcError.ProblemID == rfc7807.AuthenticationError {
+				return nil, err
+			}
+		}
+
 		return vcc.fetchNodeStateFromDownDB(options)
 	}
 
@@ -99,6 +110,12 @@ func (vcc VClusterCommands) VFetchNodeState(options *VFetchNodeStateOptions) ([]
 				vcc.Log.PrintWarning("Cannot find host %s in fetched node versions",
 					nodeInfo.Address)
 			}
+		}
+
+		// display warning if any unreachable hosts detected
+		if len(clusterOpEngine.execContext.unreachableHosts) > 0 {
+			vcc.DisplayWarning("hosts %v are unreachable, please check the NMA connectivity in the hosts",
+				clusterOpEngine.execContext.unreachableHosts)
 		}
 
 		return nodeStates, nil
@@ -179,7 +196,7 @@ func (vcc VClusterCommands) produceListAllNodesInstructions(
 		}
 	}
 
-	nmaHealthOp := makeNMAHealthOp(options.Hosts)
+	nmaHealthOp := makeNMAHealthOpSkipUnreachable(options.Hosts)
 	nmaReadVerticaVersionOp := makeNMAReadVerticaVersionOp(vdb)
 
 	// Trim host list

@@ -361,6 +361,9 @@ func (vcc VClusterCommands) produceRemoveNodeInstructions(vdb *VCoordinationData
 		// polling subscriptions for the main cluster is enough
 		var nodesToPollSubs []string
 		getMainClusterNodes(vdb, options, &nodesToPollSubs)
+		vcc.LogInfo("caitest vdb nodes", "nodes", vdb.HostList)
+		vcc.LogInfo("caitest nodes to remove", "nodes", options.HostsToRemove)
+		vcc.LogInfo("caitest nodesToPullSubs", "nodes", nodesToPollSubs)
 
 		httpsPollSubscriptionStateOp, e := makeHTTPSPollSubscriptionStateOp(initiatorHost,
 			usePassword, username, password, &nodesToPollSubs)

@@ -16,8 +16,6 @@
 package commands
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 	"github.com/vertica/vcluster/vclusterops"
 	"github.com/vertica/vcluster/vclusterops/vlog"
@@ -43,10 +41,10 @@ func makeCmdReIP() *cobra.Command {
 		newCmd,
 		reIPSubCmd,
 		"Re-ip database nodes",
-		`This subcommand changes the IP addresses of database nodes in the catalog.
+		`This command changes the IP addresses of database nodes in the catalog.
 
 The database must be down to change the IP addresses with re_ip. If
-the database is up, you must run restart_node after re_ip for the 
+the database is up, you must run start_node after re_ip for the 
 IP changes to take effect.
 
 The file specified by the re-ip-file option must be a JSON file in the
@@ -74,8 +72,8 @@ Examples:
 	newCmd.setLocalFlags(cmd)
 
 	// require re-ip-file
-	markFlagsRequired(cmd, []string{"re-ip-file"})
-	markFlagsFileName(cmd, map[string][]string{"re-ip-file": {"json"}})
+	markFlagsRequired(cmd, reIPFileFlag)
+	markFlagsFileName(cmd, map[string][]string{reIPFileFlag: {"json"}})
 
 	return cmd
 }
@@ -84,7 +82,7 @@ Examples:
 func (c *CmdReIP) setLocalFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(
 		&c.reIPFilePath,
-		"re-ip-file",
+		reIPFileFlag,
 		"",
 		"Path of the re-ip file",
 	)
@@ -107,7 +105,14 @@ func (c *CmdReIP) validateParse(logger vlog.Printer) error {
 		return err
 	}
 
-	err = c.getCertFilesFromCertPaths(&c.reIPOptions.DatabaseOptions)
+	if !c.usePassword() {
+		err = c.getCertFilesFromCertPaths(&c.reIPOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
+	}
+
+	err = c.setConfigParam(&c.reIPOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
@@ -133,15 +138,21 @@ func (c *CmdReIP) Run(vcc vclusterops.ClusterCommands) error {
 		return err
 	}
 
-	vcc.PrintInfo("Re-ip is successfully completed")
+	vcc.DisplayInfo("Successfully changed the IP addresses of database nodes")
 
 	// update config file after running re_ip
 	if canUpdateConfig {
 		c.UpdateConfig(dbConfig)
-		err = dbConfig.write(options.ConfigPath)
+		err = dbConfig.write(options.ConfigPath, true /*forceOverwrite*/)
 		if err != nil {
-			fmt.Printf("Warning: fail to update config file, details %v\n", err)
+			vcc.DisplayWarning("fail to update config file, details %v\n", err)
 		}
+	}
+
+	// write config parameters to vcluster config param file
+	err = c.writeConfigParam(options.ConfigurationParameters, true /*forceOverwrite*/)
+	if err != nil {
+		vcc.PrintWarning("fail to write config param file, details: %s", err)
 	}
 
 	return nil

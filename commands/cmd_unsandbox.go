@@ -50,7 +50,7 @@ func makeCmdUnsandboxSubcluster() *cobra.Command {
 		newCmd,
 		unsandboxSubCmd,
 		"Unsandbox a subcluster",
-		`This subcommand unsandboxes a subcluster in an existing Eon Mode database.
+		`This command unsandboxes a subcluster in an existing Eon Mode database.
 
 When you unsandbox a subcluster, its hosts shut down and restart as part of the
 main cluster.
@@ -80,7 +80,7 @@ Examples:
 	newCmd.setLocalFlags(cmd)
 
 	// require name of subcluster to unsandbox
-	markFlagsRequired(cmd, []string{subclusterFlag})
+	markFlagsRequired(cmd, subclusterFlag)
 
 	return cmd
 }
@@ -106,12 +106,14 @@ func (c *CmdUnsandboxSubcluster) Parse(inputArgv []string, logger vlog.Printer) 
 func (c *CmdUnsandboxSubcluster) parseInternal(logger vlog.Printer) error {
 	logger.Info("Called parseInternal()")
 
-	err := c.getCertFilesFromCertPaths(&c.usOptions.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.usOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 
-	err = c.ValidateParseBaseOptions(&c.usOptions.DatabaseOptions)
+	err := c.ValidateParseBaseOptions(&c.usOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
@@ -125,27 +127,27 @@ func (c *CmdUnsandboxSubcluster) Analyze(logger vlog.Printer) error {
 }
 
 func (c *CmdUnsandboxSubcluster) Run(vcc vclusterops.ClusterCommands) error {
-	vcc.PrintInfo("Running unsandbox subcluster")
 	vcc.LogInfo("Calling method Run() for command " + unsandboxSubCmd)
 
 	options := c.usOptions
 
 	err := vcc.VUnsandbox(&options)
 	if err != nil {
+		vcc.LogError(err, "fail to unsandbox subcluster")
 		return err
 	}
 
-	defer vcc.PrintInfo("Successfully unsandboxed subcluster " + c.usOptions.SCName)
+	defer vcc.DisplayInfo("Successfully unsandboxed subcluster " + c.usOptions.SCName)
 	// Read and then update the sandbox information on config file
 	dbConfig, configErr := c.resetSandboxInfo()
 	if configErr != nil {
-		vcc.PrintWarning("fail to update config file : ", "error", configErr)
+		vcc.DisplayWarning("fail to update config file : ", "error", configErr)
 		return nil
 	}
 
-	writeErr := dbConfig.write(options.ConfigPath)
+	writeErr := dbConfig.write(options.ConfigPath, true /*forceOverwrite*/)
 	if writeErr != nil {
-		vcc.PrintWarning("fail to write the config file, details: " + writeErr.Error())
+		vcc.DisplayWarning("fail to write the config file, details: " + writeErr.Error())
 		return nil
 	}
 	return nil

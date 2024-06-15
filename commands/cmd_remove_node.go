@@ -44,7 +44,7 @@ func makeCmdRemoveNode() *cobra.Command {
 		newCmd,
 		removeNodeSubCmd,
 		"Remove host(s) from an existing database",
-		`This subcommand removes one or more nodes from an existing database.
+		`This command removes one or more nodes from an existing database.
 
 You must provide the --remove option followed by one or more hosts to
 remove as a comma-separated list.
@@ -68,7 +68,7 @@ Examples:
 	newCmd.setLocalFlags(cmd)
 
 	// require hosts to remove
-	markFlagsRequired(cmd, []string{"remove"})
+	markFlagsRequired(cmd, removeNodeFlag)
 
 	return cmd
 }
@@ -77,15 +77,9 @@ Examples:
 func (c *CmdRemoveNode) setLocalFlags(cmd *cobra.Command) {
 	cmd.Flags().StringSliceVar(
 		&c.removeNodeOptions.HostsToRemove,
-		"remove",
+		removeNodeFlag,
 		[]string{},
 		"Comma-separated list of host(s) to remove from the database",
-	)
-	cmd.Flags().BoolVar(
-		&c.removeNodeOptions.ForceDelete,
-		"force-delete",
-		true,
-		"Whether to force clean-up of existing directories if they are not empty",
 	)
 }
 
@@ -108,9 +102,11 @@ func (c *CmdRemoveNode) validateParse(logger vlog.Printer) error {
 		return err
 	}
 
-	err = c.getCertFilesFromCertPaths(&c.removeNodeOptions.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err = c.getCertFilesFromCertPaths(&c.removeNodeOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 
 	err = c.ValidateParseBaseOptions(&c.removeNodeOptions.DatabaseOptions)
@@ -140,15 +136,16 @@ func (c *CmdRemoveNode) Run(vcc vclusterops.ClusterCommands) error {
 
 	vdb, err := vcc.VRemoveNode(options)
 	if err != nil {
+		vcc.LogError(err, "fail to remove node")
 		return err
 	}
 
 	// write db info to vcluster config file
-	err = writeConfig(&vdb)
+	err = writeConfig(&vdb, true /*forceOverwrite*/)
 	if err != nil {
-		vcc.PrintWarning("fail to write config file, details: %s", err)
+		vcc.DisplayWarning("fail to write config file, details: %s", err)
 	}
-	vcc.PrintInfo("Successfully removed nodes %v from database %s", c.removeNodeOptions.HostsToRemove, options.DBName)
+	vcc.DisplayInfo("Successfully removed nodes %v from database %s", c.removeNodeOptions.HostsToRemove, options.DBName)
 
 	return nil
 }
