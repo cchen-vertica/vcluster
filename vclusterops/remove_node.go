@@ -56,7 +56,7 @@ func (options *VRemoveNodeOptions) setDefaultValues() {
 }
 
 func (options *VRemoveNodeOptions) validateRequiredOptions(logger vlog.Printer) error {
-	err := options.validateBaseOptions(commandRemoveNode, logger)
+	err := options.validateBaseOptions(RemoveNodeCmd, logger)
 	if err != nil {
 		return err
 	}
@@ -191,6 +191,11 @@ func (vcc VClusterCommands) removeNodesInCatalog(options *VRemoveNodeOptions, vd
 		// show a warning about the run error for users to trouble shoot their machines
 		vcc.Log.PrintWarning("Nodes have been successfully removed, but encountered the following problems: %v",
 			runError)
+	}
+
+	if len(clusterOpEngine.execContext.unreachableHosts) > 0 {
+		vcc.DisplayInfo("Hint: please manually clean up directories in the unreachable host(s) %v",
+			clusterOpEngine.execContext.unreachableHosts)
 	}
 
 	// we return a vdb that contains only the remaining hosts
@@ -411,11 +416,12 @@ func (vcc VClusterCommands) produceRemoveNodeInstructions(vdb *VCoordinationData
 	}
 	instructions = append(instructions, &httpsReloadSpreadOp)
 
+	nmaHealthOp := makeNMAHealthOpSkipUnreachable(v.HostList)
 	nmaDeleteDirectoriesOp, err := makeNMADeleteDirectoriesOp(&v, options.ForceDelete)
 	if err != nil {
 		return instructions, err
 	}
-	instructions = append(instructions, &nmaDeleteDirectoriesOp)
+	instructions = append(instructions, &nmaHealthOp, &nmaDeleteDirectoriesOp)
 
 	if vdb.IsEon {
 		httpsSyncCatalogOp, err := makeHTTPSSyncCatalogOp(initiatorHost, true, username, password, RemoveNodeSyncCat)

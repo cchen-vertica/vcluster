@@ -104,7 +104,7 @@ func (c *CmdStartNodes) setLocalFlags(cmd *cobra.Command) {
 	cmd.Flags().IntVar(
 		&c.startNodesOptions.StatePollingTimeout,
 		"timeout",
-		util.DefaultTimeoutSeconds,
+		util.GetEnvInt("NODE_STATE_POLLING_TIMEOUT", util.DefaultTimeoutSeconds),
 		"The timeout (in seconds) to wait for polling node state operation",
 	)
 

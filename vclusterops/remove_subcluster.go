@@ -61,7 +61,7 @@ func (options *VRemoveScOptions) setDefaultValues() {
 }
 
 func (options *VRemoveScOptions) validateRequiredOptions(logger vlog.Printer) error {
-	err := options.validateBaseOptions(commandRemoveSubcluster, logger)
+	err := options.validateBaseOptions(RemoveSubclusterCmd, logger)
 	if err != nil {
 		return err
 	}

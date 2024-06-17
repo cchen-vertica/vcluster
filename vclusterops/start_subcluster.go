@@ -45,7 +45,7 @@ func (options *VStartScOptions) setDefaultValues() {
 }
 
 func (options *VStartScOptions) validateRequiredOptions(logger vlog.Printer) error {
-	err := options.validateBaseOptions(commandStartSubcluster, logger)
+	err := options.validateBaseOptions(StartSubclusterCmd, logger)
 	if err != nil {
 		return err
 	}

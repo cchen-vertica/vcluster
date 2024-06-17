@@ -68,12 +68,13 @@ func VStartNodesOptionsFactory() VStartNodesOptions {
 func (options *VStartNodesOptions) setDefaultValues() {
 	options.DatabaseOptions.setDefaultValues()
 	// set default value to StatePollingTimeout
-	options.StatePollingTimeout = util.DefaultStatePollingTimeout
+	options.StatePollingTimeout = util.GetEnvInt("NODE_STATE_POLLING_TIMEOUT", util.DefaultStatePollingTimeout)
+
 	options.Nodes = make(map[string]string)
 }
 
 func (options *VStartNodesOptions) validateRequiredOptions(logger vlog.Printer) error {
-	err := options.validateBaseOptions(commandStartNode, logger)
+	err := options.validateBaseOptions(StartNodeCmd, logger)
 	if err != nil {
 		return err
 	}
@@ -311,7 +312,7 @@ func (vcc VClusterCommands) produceStartNodesInstructions(startNodeInfo *VStartN
 	}
 
 	httpsGetUpNodesOp, err := makeHTTPSGetUpNodesOp(options.DBName, options.Hosts,
-		options.usePassword, options.UserName, options.Password, StartNodeCommand)
+		options.usePassword, options.UserName, options.Password, StartNodeCmd)
 	if err != nil {
 		return instructions, err
 	}
@@ -370,12 +371,12 @@ func (vcc VClusterCommands) produceStartNodesInstructions(startNodeInfo *VStartN
 	}
 
 	nmaStartNewNodesOp := makeNMAStartNodeOpWithVDB(startNodeInfo.HostsToStart, options.StartUpConf, vdb)
-	httpsPollNodeStateOp, err := makeHTTPSPollNodeStateOpWithTimeoutAndCommand(startNodeInfo.HostsToStart,
-		options.usePassword, options.UserName, options.Password, options.StatePollingTimeout, StartNodeCmd)
+	httpsPollNodeStateOp, err := makeHTTPSPollNodeStateOp(startNodeInfo.HostsToStart,
+		options.usePassword, options.UserName, options.Password, options.StatePollingTimeout)
 	if err != nil {
 		return instructions, err
 	}
-
+	httpsPollNodeStateOp.cmdType = StartNodeCmd
 	instructions = append(instructions,
 		&httpsRestartUpCommandOp,
 		&nmaStartNewNodesOp,

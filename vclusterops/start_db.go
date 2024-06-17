@@ -67,7 +67,7 @@ func (options *VStartDatabaseOptions) setDefaultValues() {
 }
 
 func (options *VStartDatabaseOptions) validateRequiredOptions(logger vlog.Printer) error {
-	err := options.validateBaseOptions(commandStartDB, logger)
+	err := options.validateBaseOptions(StartDBCmd, logger)
 	if err != nil {
 		return err
 	}
@@ -323,11 +323,12 @@ func (vcc VClusterCommands) produceStartDBInstructions(options *VStartDatabaseOp
 		nil /*db configurations retrieved from a running db*/)
 
 	nmaStartNewNodesOp := makeNMAStartNodeOp(options.Hosts, options.StartUpConf)
-	httpsPollNodeStateOp, err := makeHTTPSPollNodeStateOpWithTimeoutAndCommand(options.Hosts,
-		options.usePassword, options.UserName, options.Password, options.StatePollingTimeout, StartDBCmd)
+	httpsPollNodeStateOp, err := makeHTTPSPollNodeStateOp(options.Hosts,
+		options.usePassword, options.UserName, options.Password, options.StatePollingTimeout)
 	if err != nil {
 		return instructions, err
 	}
+	httpsPollNodeStateOp.cmdType = StartDBCmd
 
 	instructions = append(instructions,
 		&nmaStartNewNodesOp,
