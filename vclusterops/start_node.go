@@ -57,6 +57,8 @@ type VStartNodesInfo struct {
 	hasDownNodeNoNeedToReIP bool
 	// hosts that are not reachable through NMA
 	unreachableHosts []string
+	// is start subcluster command
+	isStartSc bool
 }
 
 func VStartNodesOptionsFactory() VStartNodesOptions {
@@ -189,8 +191,12 @@ func (vcc VClusterCommands) preStartNodeCheck(options *VStartNodesOptions, vdb *
 		return err
 	}
 
-	// sandboxes may have different catalog from the main cluster, update the vdb build from the sandbox of the nodes to start
-	err = vcc.getVDBFromRunningDBIncludeSandbox(vdb, &options.DatabaseOptions, startNodeInfo.Sandbox)
+	// If the nodes to be started are from main cluster, get vdb populated from a Main cluster node.
+	if startNodeInfo.Sandbox == util.MainClusterSandbox {
+		err = vcc.getVDBFromRunningDB(vdb, &options.DatabaseOptions)
+	} else {
+		err = vcc.getVDBFromRunningDBIncludeSandbox(vdb, &options.DatabaseOptions, startNodeInfo.Sandbox)
+	}
 	if err != nil {
 		if startNodeInfo.Sandbox != util.MainClusterSandbox {
 			return errors.Join(err, fmt.Errorf("hint: make sure there is at least one UP node in the sandbox %s", startNodeInfo.Sandbox))
@@ -211,7 +217,6 @@ func (vcc VClusterCommands) VStartNodes(options *VStartNodesOptions) error {
 	 *   - Create a VClusterOpEngine
 	 *   - Give the instructions to the VClusterOpEngine to run
 	 */
-
 	// validate and analyze options
 	err := options.validateAnalyzeOptions(vcc.Log)
 	if err != nil {
@@ -223,12 +228,13 @@ func (vcc VClusterCommands) VStartNodes(options *VStartNodesOptions) error {
 		return err
 	}
 
+	startNodeInfo := new(VStartNodesInfo)
 	vdb := makeVCoordinationDatabase()
 	if options.vdb != nil {
 		vdb = *options.vdb
+		startNodeInfo.isStartSc = true
 	}
 	hostNodeNameMap := make(map[string]string)
-	startNodeInfo := new(VStartNodesInfo)
 
 	err = vcc.preStartNodeCheck(options, &vdb, hostNodeNameMap, startNodeInfo)
 	if err != nil {
@@ -390,7 +396,8 @@ func (vcc VClusterCommands) produceStartNodesInstructions(startNodeInfo *VStartN
 	}
 
 	// require to have the same vertica version
-	nmaVerticaVersionOp := makeNMAVerticaVersionOpBeforeStartNode(vdb, startNodeInfo.unreachableHosts, startNodeInfo.HostsToStart)
+	nmaVerticaVersionOp := makeNMAVerticaVersionOpBeforeStartNode(vdb, startNodeInfo.unreachableHosts,
+		startNodeInfo.HostsToStart, startNodeInfo.isStartSc)
 	instructions = append(instructions, &nmaVerticaVersionOp)
 
 	// The second parameter (sourceConfHost) in produceTransferConfigOps is set to a nil value in the upload and download step

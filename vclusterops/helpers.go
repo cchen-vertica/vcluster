@@ -481,3 +481,9 @@ func (vcc *VClusterCommands) getUnreachableHosts(options *DatabaseOptions, hosts
 	}
 	return opEng.execContext.unreachableHosts, nil
 }
+
+// An nmaGenericJSONResponse is the default response that is generated,
+// the response value is of type "string" in JSON format.
+type nmaGenericJSONResponse struct {
+	RespStr string
+}

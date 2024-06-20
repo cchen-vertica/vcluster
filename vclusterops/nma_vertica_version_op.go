@@ -41,7 +41,8 @@ type nmaVerticaVersionOp struct {
 	scName             string
 	readOnly           bool
 	targetNodeIPs      []string // used to filter desired nodes' info
-	unreachableHosts   []string //  hosts that are  not reachable through NMA
+	unreachableHosts   []string // hosts that are not reachable through NMA
+	skipUnreachable    bool     // whether we skip unreachable host in the subcluster
 }
 
 func makeHostVersionMap() hostVersionMap {
@@ -84,6 +85,7 @@ func makeNMAVerticaVersionOpWithTargetHosts(sameVersion bool, unreachableHosts, 
 	op := makeNMACheckVerticaVersionOp(nil /*hosts*/, sameVersion, false /*isEon*/)
 	op.targetNodeIPs = targetNodeIPs
 	op.unreachableHosts = unreachableHosts
+	op.skipUnreachable = true
 	return op
 }
 
@@ -106,10 +108,12 @@ func makeNMAVerticaVersionOpWithVDB(sameVersion bool, vdb *VCoordinationDatabase
 
 // makeNMAVerticaVersionOpBeforeStartNode is used in start_node, VCluster will check Vertica
 // version for the nodes which are in the same cluster(main cluster or sandbox) as the target hosts
-func makeNMAVerticaVersionOpBeforeStartNode(vdb *VCoordinationDatabase, unreachableHosts, targetNodeIPs []string) nmaVerticaVersionOp {
+func makeNMAVerticaVersionOpBeforeStartNode(vdb *VCoordinationDatabase, unreachableHosts, targetNodeIPs []string,
+	skipUnreachable bool) nmaVerticaVersionOp {
 	op := makeNMACheckVerticaVersionOp(nil, true /*sameVersion*/, vdb.IsEon)
 	op.unreachableHosts = unreachableHosts
 	op.targetNodeIPs = targetNodeIPs
+	op.skipUnreachable = skipUnreachable
 	op.vdb = vdb
 	return op
 }
@@ -345,9 +349,8 @@ func (op *nmaVerticaVersionOp) prepareHostNodeMap(execContext *opEngineExecConte
 		if err != nil {
 			return hostNodeMap, err
 		}
-		allReachableHostsInTargetSCs := util.SliceDiff(allHostsInTargetSCs, op.unreachableHosts)
 		// get host-node map for all hosts in target subclusters
-		hostNodeMap = util.FilterMapByKey(execContext.nmaVDatabase.HostNodeMap, allReachableHostsInTargetSCs)
+		hostNodeMap = util.FilterMapByKey(execContext.nmaVDatabase.HostNodeMap, allHostsInTargetSCs)
 	}
 	return hostNodeMap, nil
 }
@@ -369,9 +372,8 @@ func (op *nmaVerticaVersionOp) prepareHostNodeMapWithVDB() (vHostNodeMap, error)
 	if err != nil {
 		return hostNodeMap, err
 	}
-	allReachableHostsInTargetSCs := util.SliceDiff(allHostsInTargetSCs, op.unreachableHosts)
 	// get host-node map for all hosts in target subclusters
-	hostNodeMap = util.FilterMapByKey(op.vdb.HostNodeMap, allReachableHostsInTargetSCs)
+	hostNodeMap = util.FilterMapByKey(op.vdb.HostNodeMap, allHostsInTargetSCs)
 
 	return hostNodeMap, nil
 }
@@ -397,6 +399,24 @@ func (op *nmaVerticaVersionOp) findHostsInTargetSubclusters(hostSCMap map[string
 	for _, sc := range targetSCs {
 		hosts, ok := scHostsMap[sc]
 		if ok {
+			// current sc contains unreachablehosts
+			if len(util.SliceCommon(hosts, op.unreachableHosts)) > 0 {
+				hasUpNodes := false
+				if !op.skipUnreachable {
+					for _, host := range hosts {
+						if op.vdb.HostNodeMap[host].State == "UP" {
+							hasUpNodes = true
+							break
+						}
+					}
+				}
+				// remove unreachable hosts
+				hosts = util.SliceDiff(hosts, op.unreachableHosts)
+				// all nodes in the existing subcluster are unreachable
+				if hasUpNodes && len(util.SliceDiff(hosts, op.targetNodeIPs)) == 0 {
+					return allHostsInTargetSCs, fmt.Errorf("[%s] all existing nodes in subcluster %s are not reachable", op.name, sc)
+				}
+			}
 			allHostsInTargetSCs = append(allHostsInTargetSCs, hosts...)
 		} else {
 			return allHostsInTargetSCs, fmt.Errorf("[%s] internal error: subcluster %s was lost when preparing the hosts", op.name, sc)
