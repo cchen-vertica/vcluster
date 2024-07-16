@@ -43,9 +43,7 @@ func makeCmdStartSubcluster() *cobra.Command {
 		newCmd,
 		startSCSubCmd,
 		"Start a subcluster",
-		`This command starts a stopped subcluster in a running Eon database.
-
-You must provide the subcluster name with the --subcluster option.
+		`Starts stopped nodes in a subcluster.
 
 Examples:
   # Start a subcluster with config file
@@ -77,13 +75,13 @@ func (c *CmdStartSubcluster) setLocalFlags(cmd *cobra.Command) {
 		&c.startScOptions.SCName,
 		subclusterFlag,
 		"",
-		"Name of subcluster to start",
+		"Name of the subcluster to start.",
 	)
 	cmd.Flags().IntVar(
 		&c.startScOptions.StatePollingTimeout,
 		"timeout",
 		util.DefaultTimeoutSeconds,
-		"The timeout (in seconds) to wait for polling node state operation",
+		"The time (in seconds) to wait for nodes to start up (default: 300).",
 	)
 }
 
@@ -129,7 +127,7 @@ func (c *CmdStartSubcluster) Run(vcc vclusterops.ClusterCommands) error {
 
 	err := vcc.VStartSubcluster(options)
 	if err != nil {
-		vcc.LogError(err, "fail to start subcluster")
+		vcc.LogError(err, "failed to start subcluster.")
 		return err
 	}
 

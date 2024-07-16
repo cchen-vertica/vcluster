@@ -404,7 +404,7 @@ func (op *nmaVerticaVersionOp) findHostsInTargetSubclusters(hostSCMap map[string
 				hasUpNodes := false
 				if !op.skipUnreachable {
 					for _, host := range hosts {
-						if op.vdb.HostNodeMap[host].State == "UP" {
+						if op.vdb.hostIsUp(host) {
 							hasUpNodes = true
 							break
 						}

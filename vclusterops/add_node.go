@@ -176,7 +176,9 @@ func (vcc VClusterCommands) VAddNode(options *VAddNodeOptions) (VCoordinationDat
 
 	// trim stale node information from catalog
 	// if NodeNames is provided
-	err = vcc.trimNodesInCatalog(&vdb, options)
+	// existingHostNodeMap will contain entries for all expected node names and sandboxed node names,
+	// excluding to be trimmed node names
+	existingHostNodeMap, err := vcc.trimNodesInCatalog(&vdb, options)
 	if err != nil {
 		return vdb, err
 	}
@@ -188,7 +190,7 @@ func (vcc VClusterCommands) VAddNode(options *VAddNodeOptions) (VCoordinationDat
 		return vdb, err
 	}
 
-	err = vdb.addHosts(options.NewHosts, options.SCName)
+	err = vdb.addHosts(options.NewHosts, options.SCName, existingHostNodeMap)
 	if err != nil {
 		return vdb, err
 	}
@@ -198,8 +200,7 @@ func (vcc VClusterCommands) VAddNode(options *VAddNodeOptions) (VCoordinationDat
 		return vdb, fmt.Errorf("fail to produce add node instructions, %w", err)
 	}
 
-	certs := httpsCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+	clusterOpEngine := makeClusterOpEngine(instructions, options)
 	if runError := clusterOpEngine.run(vcc.Log); runError != nil {
 		return vdb, fmt.Errorf("fail to complete add node operation, %w", runError)
 	}
@@ -242,10 +243,14 @@ func (options *VAddNodeOptions) completeVDBSetting(vdb *VCoordinationDatabase) e
 // trimNodesInCatalog removes failed node info from catalog
 // which can be used to remove partially added nodes
 func (vcc VClusterCommands) trimNodesInCatalog(vdb *VCoordinationDatabase,
-	options *VAddNodeOptions) error {
+	options *VAddNodeOptions) (vHostNodeMap, error) {
+	// existingHostNodeMap will contain entries for all expected node names and sandboxed node names,
+	// excluding to be trimmed node names
+	existingHostNodeMap := make(vHostNodeMap)
 	if len(options.ExpectedNodeNames) == 0 {
 		vcc.Log.Info("ExpectedNodeNames is not set, skip trimming nodes", "ExpectedNodeNames", options.ExpectedNodeNames)
-		return nil
+		existingHostNodeMap = util.CopyMap(vdb.HostNodeMap)
+		return existingHostNodeMap, nil
 	}
 
 	// find out nodes to be trimmed
@@ -262,10 +267,13 @@ func (vcc VClusterCommands) trimNodesInCatalog(vdb *VCoordinationDatabase,
 		nodeNamesInCatalog[vnode.Name] = struct{}{}
 		if _, ok := expectedNodeNames[vnode.Name]; ok { // catalog node is expected
 			aliveHosts = append(aliveHosts, h)
-		} else { // catalog node is not expected, trim it
+			existingHostNodeMap[h] = vnode
+		} else if vnode.Sandbox != "" { // add sandbox node to allExistingHostNodeMap as well
+			existingHostNodeMap[h] = vnode
+		} else { // main cluster catalog node is not expected, trim it
 			// cannot trim UP nodes
 			if vnode.State == util.NodeUpState {
-				return fmt.Errorf("cannot trim the UP node %s (address %s)",
+				return existingHostNodeMap, fmt.Errorf("cannot trim the UP node %s (address %s)",
 					vnode.Name, h)
 			}
 			nodesToTrim = append(nodesToTrim, vnode.Name)
@@ -275,13 +283,13 @@ func (vcc VClusterCommands) trimNodesInCatalog(vdb *VCoordinationDatabase,
 	// sanity check: all provided node names should be found in catalog
 	invalidNodeNames := util.MapKeyDiff(expectedNodeNames, nodeNamesInCatalog)
 	if len(invalidNodeNames) > 0 {
-		return fmt.Errorf("node names %v are not found in database %s",
+		return existingHostNodeMap, fmt.Errorf("node names %v are not found in database %s",
 			invalidNodeNames, vdb.Name)
 	}
 
 	vcc.Log.PrintInfo("Trim nodes %+v from catalog", nodesToTrim)
 
-	// pick any up host as intiator
+	// pick any up host as initiator
 	initiator := aliveHosts[:1]
 
 	var instructions []clusterOp
@@ -292,7 +300,7 @@ func (vcc VClusterCommands) trimNodesInCatalog(vdb *VCoordinationDatabase,
 			options.usePassword, options.UserName, options.Password,
 			ksafeValueZero)
 		if err != nil {
-			return err
+			return existingHostNodeMap, err
 		}
 		instructions = append(instructions, &httpsMarkDesignKSafeOp)
 	}
@@ -302,24 +310,23 @@ func (vcc VClusterCommands) trimNodesInCatalog(vdb *VCoordinationDatabase,
 		httpsDropNodeOp, err := makeHTTPSDropNodeOp(nodeName, initiator,
 			options.usePassword, options.UserName, options.Password, vdb.IsEon)
 		if err != nil {
-			return err
+			return existingHostNodeMap, err
 		}
 		instructions = append(instructions, &httpsDropNodeOp)
 	}
 
-	certs := httpsCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+	clusterOpEngine := makeClusterOpEngine(instructions, options)
 	err := clusterOpEngine.run(vcc.Log)
 	if err != nil {
 		vcc.Log.Error(err, "fail to trim nodes from catalog, %v")
-		return err
+		return existingHostNodeMap, err
 	}
 
 	// update vdb info
 	vdb.HostNodeMap = util.FilterMapByKey(vdb.HostNodeMap, aliveHosts)
 	vdb.HostList = aliveHosts
 
-	return nil
+	return existingHostNodeMap, nil
 }
 
 // produceAddNodeInstructions will build a list of instructions to execute for

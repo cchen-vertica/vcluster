@@ -110,6 +110,7 @@ type nodeStateInfo struct {
 	Sandbox          string   `json:"sandbox_name"`
 	Version          string   `json:"build_info"`
 	IsControlNode    bool     `json:"is_control_node"`
+	ControlNode      string   `json:"control_node"`
 }
 
 func (node *nodeStateInfo) asNodeInfo() (n NodeInfo, err error) {
@@ -264,8 +265,7 @@ func (vcc VClusterCommands) getVDBFromRunningDBImpl(vdb *VCoordinationDatabase, 
 		instructions = append(instructions, &httpsUpdateNodeState)
 	}
 
-	certs := httpsCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+	clusterOpEngine := makeClusterOpEngine(instructions, options)
 	err = clusterOpEngine.run(vcc.Log)
 	if err != nil {
 		return fmt.Errorf("fail to retrieve database configurations, %w", err)
@@ -290,8 +290,7 @@ func (vcc VClusterCommands) getClusterInfoFromRunningDB(vdb *VCoordinationDataba
 	var instructions []clusterOp
 	instructions = append(instructions, &httpsGetClusterInfoOp)
 
-	certs := httpsCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+	clusterOpEngine := makeClusterOpEngine(instructions, options)
 	err = clusterOpEngine.run(vcc.Log)
 	if err != nil {
 		return fmt.Errorf("fail to retrieve cluster configurations, %w", err)
@@ -459,8 +458,7 @@ func (vcc *VClusterCommands) doReIP(options *DatabaseOptions, scName string,
 		}
 		instructions = append(instructions, &httpsReloadSpreadOp)
 	}
-	certs := httpsCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+	clusterOpEngine := makeClusterOpEngine(instructions, options)
 	err = clusterOpEngine.run(vcc.Log)
 	if err != nil {
 		return fmt.Errorf("failed to re-ip nodes of subcluster %q: %w", scName, err)
@@ -473,8 +471,7 @@ func (vcc *VClusterCommands) getUnreachableHosts(options *DatabaseOptions, hosts
 	var nmaHealthInstructions []clusterOp
 	nmaHealthOp := makeNMAHealthOpSkipUnreachable(hosts)
 	nmaHealthInstructions = []clusterOp{&nmaHealthOp}
-	certs := httpsCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	opEng := makeClusterOpEngine(nmaHealthInstructions, &certs)
+	opEng := makeClusterOpEngine(nmaHealthInstructions, options)
 	err := opEng.run(vcc.Log)
 	if err != nil {
 		return nil, err

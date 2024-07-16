@@ -191,7 +191,7 @@ func (vcc VClusterCommands) preStartNodeCheck(options *VStartNodesOptions, vdb *
 		return err
 	}
 
-	// If the nodes to be started are from main cluster, get vdb populated from a Main cluster node.
+	// if the nodes to be started are from main cluster, get vdb populated from a Main cluster node.
 	if startNodeInfo.Sandbox == util.MainClusterSandbox {
 		err = vcc.getVDBFromRunningDB(vdb, &options.DatabaseOptions)
 	} else {
@@ -249,7 +249,10 @@ func (vcc VClusterCommands) VStartNodes(options *VStartNodesOptions) error {
 	// find out hosts
 	// - that need to re-ip, and
 	// - that don't need to re-ip
-	hostsNoNeedToReIP := options.separateHostsBasedOnReIPNeed(hostNodeNameMap, startNodeInfo, &vdb, vcc.Log)
+	startNodeInfo.HostsToStart, err = options.separateHostsBasedOnReIPNeed(hostNodeNameMap, startNodeInfo, &vdb, vcc.Log)
+	if err != nil {
+		return err
+	}
 
 	// check primary node count is more than nodes to re-ip, specially for sandboxes
 	err = options.checkQuorum(&vdb, startNodeInfo)
@@ -267,10 +270,6 @@ func (vcc VClusterCommands) VStartNodes(options *VStartNodesOptions) error {
 		return nil
 	}
 
-	// we can proceed to start both nodes with and without IP changes
-	startNodeInfo.HostsToStart = append(startNodeInfo.HostsToStart, startNodeInfo.ReIPList...)
-	startNodeInfo.HostsToStart = append(startNodeInfo.HostsToStart, hostsNoNeedToReIP...)
-
 	// If no nodes found to start. We can simply exit here. This can happen if
 	// given a list of nodes that aren't in the catalog any longer.
 	if len(startNodeInfo.HostsToStart) == 0 {
@@ -287,8 +286,7 @@ func (vcc VClusterCommands) VStartNodes(options *VStartNodesOptions) error {
 	}
 
 	// create a VClusterOpEngine, and add certs to the engine
-	certs := httpsCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+	clusterOpEngine := makeClusterOpEngine(instructions, options)
 
 	// Give the instructions to the VClusterOpEngine to run
 	err = clusterOpEngine.run(vcc.Log)
@@ -441,11 +439,45 @@ func (vcc VClusterCommands) produceStartNodesInstructions(startNodeInfo *VStartN
 	return instructions, nil
 }
 
+// validateControlNode returns true if the host is a control node and error out
+// if the host is a non-control node with its corresponding control node not up or not to be started
+func (options *VStartNodesOptions) validateControlNode(host string, vdb *VCoordinationDatabase,
+	hostNodeNameMap map[string]string, isReIP bool) (bool, error) {
+	if vdb.HostNodeMap[host].IsControlNode {
+		return true, nil
+	}
+	// non control node
+	controlNode := vdb.HostNodeMap[host].ControlNode
+	isInNodes := false
+	if isReIP {
+		for name, ip := range hostNodeNameMap {
+			if controlNode == ip {
+				_, isInNodes = options.Nodes[name]
+				break
+			}
+		}
+	} else {
+		for _, ip := range options.Nodes {
+			if controlNode == ip {
+				isInNodes = true
+				break
+			}
+		}
+	}
+	// control node is up or to be started
+	if vdb.hostIsUp(controlNode) || isInNodes {
+		// add non-control node to the end
+		return false, nil
+	}
+	return false, fmt.Errorf("control node %s need to be up before node %s can be started", controlNode, host)
+}
+
 func (options *VStartNodesOptions) separateHostsBasedOnReIPNeed(
 	hostNodeNameMap map[string]string,
 	startNodeInfo *VStartNodesInfo,
 	vdb *VCoordinationDatabase,
-	logger vlog.Printer) (hostsNoNeedToReIP []string) {
+	logger vlog.Printer) ([]string, error) {
+	var sortedHosts []string // control nodes first
 	for nodename, newIP := range options.Nodes {
 		oldIP, ok := hostNodeNameMap[nodename]
 		if !ok {
@@ -456,21 +488,31 @@ func (options *VStartNodesOptions) separateHostsBasedOnReIPNeed(
 				"nodename", nodename, "newIP", newIP)
 			continue
 		}
+
 		// if the IP that is given is different than the IP in the catalog, a re-ip is necessary
 		if oldIP != newIP {
 			startNodeInfo.ReIPList = append(startNodeInfo.ReIPList, newIP)
 			startNodeInfo.NodeNamesToStart = append(startNodeInfo.NodeNamesToStart, nodename)
 			logger.Info("the nodes need to be re-IP", "nodeNames", startNodeInfo.NodeNamesToStart, "IPs", startNodeInfo.ReIPList)
 		} else {
-			// otherwise, we don't need to re-ip
-			hostsNoNeedToReIP = append(hostsNoNeedToReIP, newIP)
-
 			vnode, ok := vdb.HostNodeMap[newIP]
 			if ok && vnode.State == util.NodeDownState {
 				startNodeInfo.hasDownNodeNoNeedToReIP = true
 			}
 		}
+
+		isControl, err := options.validateControlNode(oldIP, vdb, hostNodeNameMap, oldIP != newIP)
+		if err != nil {
+			return sortedHosts, err
+		}
+		if isControl {
+			// add control node to the front
+			sortedHosts = append([]string{newIP}, sortedHosts...)
+		} else {
+			// add non-control node to the end
+			sortedHosts = append(sortedHosts, newIP)
+		}
 	}
 
-	return hostsNoNeedToReIP
+	return sortedHosts, nil
 }

@@ -43,10 +43,10 @@ type resultStatus int
 var wrongCredentialErrMsg = []string{"Wrong password", "Wrong certificate"}
 
 const (
-	SUCCESS   resultStatus = 0
-	FAILURE   resultStatus = 1
-	EXCEPTION resultStatus = 2
-	EOF       resultStatus = 3
+	SUCCESS      resultStatus = 0
+	FAILURE      resultStatus = 1
+	EXCEPTION    resultStatus = 2
+	EOFEXCEPTION resultStatus = 3
 )
 
 const (
@@ -65,9 +65,10 @@ const (
 )
 
 const (
-	SuccessResult   = "SUCCESS"
-	FailureResult   = "FAILURE"
-	ExceptionResult = "FAILURE"
+	SuccessResult      = "SUCCESS"
+	FailureResult      = "FAILURE"
+	ExceptionResult    = "EXCEPTION"
+	EOFExceptionResult = "EOF_EXCEPTION"
 )
 
 const (
@@ -158,7 +159,7 @@ func (hostResult *hostHTTPResult) isTimeout() bool {
 }
 
 func (hostResult *hostHTTPResult) isEOF() bool {
-	return hostResult.status == EOF
+	return hostResult.status == EOFEXCEPTION
 }
 
 // getStatusString converts ResultStatus to string
@@ -167,6 +168,8 @@ func (status resultStatus) getStatusString() string {
 		return FailureResult
 	} else if status == EXCEPTION {
 		return ExceptionResult
+	} else if status == EOFEXCEPTION {
+		return EOFExceptionResult
 	}
 	return SuccessResult
 }
@@ -194,7 +197,7 @@ type clusterOp interface {
 	logExecute()
 	logFinalize()
 	setupBasicInfo()
-	loadCertsIfNeeded(certs *httpsCerts, findCertsInOptions bool) error
+	loadCertsIfNeeded(tlsOptions opTLSOptions) error
 	isSkipExecute() bool
 	filterUnreachableHosts(execContext *opEngineExecContext)
 }
@@ -379,9 +382,14 @@ func (op *opBase) runExecute(execContext *opEngineExecContext) error {
 	return nil
 }
 
+type opTLSOptions interface {
+	hasCerts() bool
+	getCerts() *httpsCerts
+}
+
 // if found certs in the options, we add the certs to http requests of each instruction
-func (op *opBase) loadCertsIfNeeded(certs *httpsCerts, findCertsInOptions bool) error {
-	if !findCertsInOptions {
+func (op *opBase) loadCertsIfNeeded(tlsOptions opTLSOptions) error {
+	if tlsOptions == nil || !tlsOptions.hasCerts() {
 		return nil
 	}
 
@@ -390,16 +398,15 @@ func (op *opBase) loadCertsIfNeeded(certs *httpsCerts, findCertsInOptions bool) 
 		return fmt.Errorf("[%s] clusterHTTPRequest.RequestCollection is empty", op.name)
 	}
 
+	// retrieve certs once to avoid extra copies
+	certs := tlsOptions.getCerts()
 	if certs == nil {
 		return fmt.Errorf("[%s] is trying to use certificates, but none are set", op.name)
 	}
 
 	for host := range op.clusterHTTPRequest.RequestCollection {
 		request := op.clusterHTTPRequest.RequestCollection[host]
-		request.UseCertsInOptions = true
-		request.Certs.key = certs.key
-		request.Certs.cert = certs.cert
-		request.Certs.caCert = certs.caCert
+		request.setCerts(certs)
 		op.clusterHTTPRequest.RequestCollection[host] = request
 	}
 	return nil
