@@ -409,7 +409,8 @@ func (vcc VClusterCommands) produceAddNodeInstructions(vdb *VCoordinationDatabas
 	produceTransferConfigOps(&instructions,
 		nil,
 		vdb.HostList,
-		vdb /*db configurations retrieved from a running db*/)
+		vdb, /*db configurations retrieved from a running db*/
+		nil /*Sandbox name*/)
 
 	nmaStartNewNodesOp := makeNMAStartNodeOpWithVDB(newHosts, options.StartUpConf, vdb)
 	httpsPollNodeStateOp, err := makeHTTPSPollNodeStateOp(newHosts, usePassword, username, password, options.TimeOut)
@@ -441,7 +442,7 @@ func (vcc VClusterCommands) prepareAdditionalEonInstructions(vdb *VCoordinationD
 	}
 
 	if vdb.IsEon {
-		httpsSyncCatalogOp, err := makeHTTPSSyncCatalogOp(initiatorHost, true, username, options.Password, AddNodeSyncCat)
+		httpsSyncCatalogOp, err := makeHTTPSSyncCatalogOp(initiatorHost, usePassword, username, options.Password, AddNodeSyncCat)
 		if err != nil {
 			return instructions, err
 		}

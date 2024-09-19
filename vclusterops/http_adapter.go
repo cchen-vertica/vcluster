@@ -178,17 +178,18 @@ func (*responseBodyReader) processResponseBody(resp *http.Response) (bodyString 
 }
 
 func (downloader *responseBodyDownloader) processResponseBody(resp *http.Response) (bodyString string, err error) {
-	if isSuccess(resp) {
-		bytesWritten, err := downloader.downloadFile(resp)
-		if err != nil {
-			err = fmt.Errorf("fail to stream the response body to file %s: %w", downloader.destFilePath, err)
-		} else {
-			downloader.logger.Info("File downloaded", "File", downloader.destFilePath, "Bytes", bytesWritten)
-		}
-		return "", err
+	if !isSuccess(resp) {
+		// in case of error, we get an RFC7807 error, not a file
+		return readResponseBody(resp)
 	}
-	// in case of error, we get an RFC7807 error, not a file
-	return readResponseBody(resp)
+
+	bytesWritten, err := downloader.downloadFile(resp)
+	if err != nil {
+		err = fmt.Errorf("fail to stream the response body to file %s: %w", downloader.destFilePath, err)
+	} else {
+		downloader.logger.Info("File downloaded", "File", downloader.destFilePath, "Bytes", bytesWritten)
+	}
+	return "", err
 }
 
 // downloadFile uses buffered read/writes to download the http response body to a file
@@ -205,8 +206,7 @@ func (downloader *responseBodyDownloader) downloadFile(resp *http.Response) (byt
 func readResponseBody(resp *http.Response) (bodyString string, err error) {
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		err = fmt.Errorf("fail to read the response body: %w", err)
-		return "", err
+		return "", fmt.Errorf("fail to read the response body: %w", err)
 	}
 	bodyString = string(bodyBytes)
 
@@ -343,8 +343,6 @@ func (adapter *httpAdapter) setupHTTPClient(
 	request *hostHTTPRequest,
 	usePassword bool,
 	_ chan<- hostHTTPResult) (*http.Client, error) {
-	var client *http.Client
-
 	// set up request timeout
 	requestTimeout := time.Duration(defaultRequestTimeout)
 	if request.Timeout > 0 {
@@ -353,17 +351,15 @@ func (adapter *httpAdapter) setupHTTPClient(
 		requestTimeout = time.Duration(0) // a Timeout of zero means no timeout.
 	}
 
+	client := &http.Client{Timeout: time.Second * requestTimeout}
+	var config *tls.Config
+
 	if usePassword {
 		// TODO: we have to use `InsecureSkipVerify: true` here,
 		//       as password is used
 		//nolint:gosec
-		client = &http.Client{
-			Timeout: time.Second * requestTimeout,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true,
-				},
-			},
+		config = &tls.Config{
+			InsecureSkipVerify: true,
 		}
 	} else {
 		var cert tls.Certificate
@@ -377,22 +373,29 @@ func (adapter *httpAdapter) setupHTTPClient(
 		if err != nil {
 			return client, err
 		}
-		// for both http and nma, we have to use `InsecureSkipVerify: true` here
-		// because the certs are self signed at this time
-		// TODO: update the InsecureSkipVerify once we start to use non-self-signed certs
 
+		// by default, skip peer certificate validation, but allow overrides
 		//nolint:gosec
-		client = &http.Client{
-			Timeout: time.Second * requestTimeout,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					Certificates:       []tls.Certificate{cert},
-					RootCAs:            caCertPool,
-					InsecureSkipVerify: true,
-				},
-			},
+		config = &tls.Config{
+			Certificates:       []tls.Certificate{cert},
+			RootCAs:            caCertPool,
+			InsecureSkipVerify: true,
+		}
+		if request.TLSDoVerify {
+			if request.TLSDoVerifyHostname {
+				// use the built-in golang verification process to validate certificate signer chain
+				// and hostname
+				config.InsecureSkipVerify = false
+			} else {
+				// Note that hosts at this point are IP addresses, so verify-full may be impractical
+				// or impossible due to the complications of issuing certificates valid for IPs.
+				// Hence the custom validator skipping hostname validation.
+				config.VerifyPeerCertificate = util.GenerateTLSVerifyFunc(caCertPool)
+			}
 		}
 	}
+
+	client.Transport = &http.Transport{TLSClientConfig: config}
 	return client, nil
 }
 

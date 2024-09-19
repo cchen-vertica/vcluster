@@ -87,8 +87,13 @@ Examples:
 	cmd.MarkFlagsOneRequired(targetConnFlag, targetDBNameFlag)
 	cmd.MarkFlagsOneRequired(targetConnFlag, targetHostsFlag)
 
+	// tableOrSchema or pattern can not be accepted together
+	cmd.MarkFlagsMutuallyExclusive(tableOrSchemaNameFlag, includePatternFlag)
+	cmd.MarkFlagsMutuallyExclusive(tableOrSchemaNameFlag, excludePatternFlag)
+
 	// hide eon mode flag since we expect it to come from config file, not from user input
-	hideLocalFlags(cmd, []string{eonModeFlag})
+	hideLocalFlags(cmd, []string{eonModeFlag, asyncFlag, tableOrSchemaNameFlag,
+		includePatternFlag, excludePatternFlag, targetNamespaceFlag})
 	return cmd
 }
 
@@ -132,6 +137,51 @@ func (c *CmdStartReplication) setLocalFlags(cmd *cobra.Command) {
 			"containing the database name, hosts, and password (if any) for the target database. "+
 			"Alternatively, you can provide this information manually with --target-db-name, "+
 			"--target-hosts, and --target-password-file",
+	)
+	cmd.Flags().BoolVar(
+		&c.startRepOptions.Async,
+		asyncFlag,
+		false,
+		"If set to true, will run the replicate operation asynchronously. "+
+			"Default value is false.",
+	)
+	cmd.Flags().StringVar(
+		&c.startRepOptions.TableOrSchemaName,
+		tableOrSchemaNameFlag,
+		"",
+		"(only async replication)The object name we want to copy from the source side. The available"+
+			" types are: namespace, schema, table. If this is omitted, the operator"+
+			" will replicate all namespaces in the source database.",
+	)
+	cmd.Flags().StringVar(
+		&c.startRepOptions.IncludePattern,
+		includePatternFlag,
+		"",
+		"(only async replication)A string containing a wildcard pattern of the schemas and/or tables to"+
+			"include in the replication. Namespace names must be front-qualified "+
+			"with a period.",
+	)
+	cmd.Flags().StringVar(
+		&c.startRepOptions.ExcludePattern,
+		excludePatternFlag,
+		"",
+		"(only async replication)A string containing a wildcard pattern of the schemas and/or tables"+
+			" to exclude from the set of tables matched by the include pattern. "+
+			"Namespace names must be front-qualified with a period.",
+	)
+	cmd.Flags().StringVar(
+		&c.startRepOptions.TargetNamespace,
+		targetNamespaceFlag,
+		"",
+		"(only async replication)Namespace in the target database to which objects are replicated."+
+			" The target namespace must have the same shard count as the source "+
+			"namespace in the source cluster."+
+			"If you do not specify a target namespace, objects are replicated to"+
+			" a namespace with the same name as the source namespace. If no such"+
+			" namespace exists in the target cluster, it is created with the same"+
+			" name and shard count as the source namespace. You can only replicate"+
+			" tables in the public schema to the default_namespace in the target"+
+			" cluster.",
 	)
 	markFlagsFileName(cmd, map[string][]string{targetConnFlag: {"yaml"}})
 	//  password flags
@@ -225,12 +275,18 @@ func (c *CmdStartReplication) Run(vcc vclusterops.ClusterCommands) error {
 
 	options := c.startRepOptions
 
-	err := vcc.VReplicateDatabase(options)
+	transactionID, err := vcc.VReplicateDatabase(options)
 	if err != nil {
 		vcc.LogError(err, "failed to replicate to database", "targetDB", options.TargetDB)
 		return err
 	}
-	vcc.DisplayInfo("Successfully replicated to database %s", options.TargetDB)
+
+	if options.Async {
+		vcc.DisplayInfo("Successfully started replication to database %s. Transaction ID: %d", options.TargetDB, transactionID)
+	} else {
+		vcc.DisplayInfo("Successfully replicated to database %s", options.TargetDB)
+	}
+
 	return nil
 }
 
