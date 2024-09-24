@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -25,7 +25,10 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
+	"github.com/go-logr/logr"
+	"github.com/theckman/yacspin"
 	"github.com/vertica/vcluster/vclusterops/util"
 	"github.com/vertica/vcluster/vclusterops/vlog"
 )
@@ -33,16 +36,17 @@ import (
 /* Op and host http result status
  */
 
-// ResultStatus is the data type for the status of
-// ClusterOpResult and HostHTTPResult
-type ResultStatus int
+// resultStatus is the data type for the status of
+// ClusterOpResult and hostHTTPResult
+type resultStatus int
 
 var wrongCredentialErrMsg = []string{"Wrong password", "Wrong certificate"}
 
 const (
-	SUCCESS   ResultStatus = 0
-	FAILURE   ResultStatus = 1
-	EXCEPTION ResultStatus = 2
+	SUCCESS      resultStatus = 0
+	FAILURE      resultStatus = 1
+	EXCEPTION    resultStatus = 2
+	EOFEXCEPTION resultStatus = 3
 )
 
 const (
@@ -61,26 +65,28 @@ const (
 )
 
 const (
-	SuccessResult   = "SUCCESS"
-	FailureResult   = "FAILURE"
-	ExceptionResult = "FAILURE"
+	SuccessResult      = "SUCCESS"
+	FailureResult      = "FAILURE"
+	ExceptionResult    = "EXCEPTION"
+	EOFExceptionResult = "EOF_EXCEPTION"
 )
 
 const (
-	SuccessCode        = 200
-	MultipleChoiceCode = 300
-	UnauthorizedCode   = 401
-	InternalErrorCode  = 500
+	SuccessCode            = 200
+	MultipleChoiceCode     = 300
+	UnauthorizedCode       = 401
+	PreconditionFailedCode = 412
+	InternalErrorCode      = 500
 )
 
-// HostHTTPResult is used to save result of an Adapter's sendRequest(...) function
+// hostHTTPResult is used to save result of an Adapter's sendRequest(...) function
 // it is the element of the adapter pool's channel
-type HostHTTPResult struct {
-	status     ResultStatus
+type hostHTTPResult struct {
+	status     resultStatus
 	statusCode int
 	host       string
 	content    string
-	err        error // This is set if the http response ends in a failure scenario
+	err        error // This is set if the http response with a status code that is not 2XX
 }
 
 type httpsResponseStatus struct {
@@ -92,57 +98,63 @@ const respSuccStatusCode = 0
 // The HTTP response with a 401 status code can have several scenarios:
 // 1. Wrong password
 // 2. Wrong certificate
-// 3. The local node has not yet joined the cluster; the HTTP server will accept connections once the node joins the cluster.
-// HTTPCheckDBRunningOp in create_db need to check all scenarios to see any HTTP running
-// For HTTPSPollNodeStateOp in start_db, it requires only handling the first and second scenarios
-func (hostResult *HostHTTPResult) IsUnauthorizedRequest() bool {
+// HTTPCheckDBRunningOp in create_db and HTTPSPollNodeStateOp in start_db need to handle these scenarios
+func (hostResult *hostHTTPResult) isUnauthorizedRequest() bool {
 	return hostResult.statusCode == UnauthorizedCode
 }
 
-// IsSuccess returns true if status code is 200
-func (hostResult *HostHTTPResult) IsSuccess() bool {
+// The HTTP response with a 412 may happen if
+// the local node has not yet joined the cluster; the HTTP server will accept connections once the node joins the cluster.
+func (hostResult *hostHTTPResult) hasPreconditionFailed() bool {
+	return hostResult.statusCode == PreconditionFailedCode
+}
+
+// isSuccess returns true if status code is 200
+func (hostResult *hostHTTPResult) isSuccess() bool {
 	return hostResult.statusCode == SuccessCode
 }
 
 // check only password and certificate for start_db
-func (hostResult *HostHTTPResult) IsPasswordAndCertificateError(log vlog.Printer) bool {
-	if !hostResult.IsUnauthorizedRequest() {
+func (hostResult *hostHTTPResult) isPasswordAndCertificateError(logger vlog.Printer) bool {
+	if !hostResult.isUnauthorizedRequest() {
 		return false
 	}
 	resultString := fmt.Sprintf("%v", hostResult)
 	for _, msg := range wrongCredentialErrMsg {
 		if strings.Contains(resultString, msg) {
-			log.Error(errors.New(msg), "the user has provided")
+			logger.Error(errors.New(msg), "the user has provided")
 			return true
 		}
 	}
 	return false
 }
 
-func (hostResult *HostHTTPResult) IsInternalError() bool {
+func (hostResult *hostHTTPResult) isInternalError() bool {
 	return hostResult.statusCode == InternalErrorCode
 }
 
-func (hostResult *HostHTTPResult) IsHTTPRunning() bool {
-	if hostResult.isPassing() || hostResult.IsUnauthorizedRequest() || hostResult.IsInternalError() {
+func (hostResult *hostHTTPResult) isHTTPRunning() bool {
+	if hostResult.isPassing() || hostResult.isUnauthorizedRequest() ||
+		hostResult.isInternalError() || hostResult.hasPreconditionFailed() {
 		return true
 	}
 	return false
 }
 
-func (hostResult *HostHTTPResult) isPassing() bool {
+// HTTP status code >= 200 and < 300
+func (hostResult *hostHTTPResult) isPassing() bool {
 	return hostResult.err == nil
 }
 
-func (hostResult *HostHTTPResult) isFailing() bool {
+func (hostResult *hostHTTPResult) isFailing() bool {
 	return hostResult.status == FAILURE
 }
 
-func (hostResult *HostHTTPResult) isException() bool {
+func (hostResult *hostHTTPResult) isException() bool {
 	return hostResult.status == EXCEPTION
 }
 
-func (hostResult *HostHTTPResult) isTimeout() bool {
+func (hostResult *hostHTTPResult) isTimeout() bool {
 	if hostResult.err != nil {
 		var netErr net.Error
 		if errors.As(hostResult.err, &netErr) && netErr.Timeout() {
@@ -152,12 +164,18 @@ func (hostResult *HostHTTPResult) isTimeout() bool {
 	return false
 }
 
+func (hostResult *hostHTTPResult) isEOF() bool {
+	return hostResult.status == EOFEXCEPTION
+}
+
 // getStatusString converts ResultStatus to string
-func (status ResultStatus) getStatusString() string {
+func (status resultStatus) getStatusString() string {
 	if status == FAILURE {
 		return FailureResult
 	} else if status == EXCEPTION {
 		return ExceptionResult
+	} else if status == EOFEXCEPTION {
+		return EOFExceptionResult
 	}
 	return SuccessResult
 }
@@ -165,108 +183,249 @@ func (status ResultStatus) getStatusString() string {
 /* Cluster ops interface
  */
 
-// ClusterOp interface requires that all ops implements
+// clusterOp interface requires that all ops implements
 // the following functions
 // log* implemented by embedding OpBase, but overrideable
-type ClusterOp interface {
+type clusterOp interface {
 	getName() string
-	prepare(execContext *OpEngineExecContext) error
-	execute(execContext *OpEngineExecContext) error
-	finalize(execContext *OpEngineExecContext) error
-	processResult(execContext *OpEngineExecContext) error
-	logResponse(host string, result HostHTTPResult)
+	setLogger(logger vlog.Printer)
+	setupSpinner()
+	startSpinner()
+	cleanupSpinner()
+	stopFailSpinner()
+	stopFailSpinnerWithMessage(errMsg string, v ...any)
+	prepare(execContext *opEngineExecContext) error
+	execute(execContext *opEngineExecContext) error
+	finalize(execContext *opEngineExecContext) error
+	processResult(execContext *opEngineExecContext) error
+	logResponse(host string, result hostHTTPResult)
 	logPrepare()
 	logExecute()
 	logFinalize()
-	loadCertsIfNeeded(certs *HTTPSCerts, findCertsInOptions bool) error
+	setupBasicInfo()
+	applyTLSOptions(tlsOptions opTLSOptions) error
 	isSkipExecute() bool
+	filterUnreachableHosts(execContext *opEngineExecContext)
 }
 
 /* Cluster ops basic fields and functions
  */
 
-// OpBase defines base fields and implements basic functions
+// opBase defines base fields and implements basic functions
 // for all ops
-type OpBase struct {
-	log                vlog.Printer
+type opBase struct {
+	logger             vlog.Printer
 	name               string
+	description        string
 	hosts              []string
-	clusterHTTPRequest ClusterHTTPRequest
+	clusterHTTPRequest clusterHTTPRequest
 	skipExecute        bool // This can be set during prepare if we determine no work is needed
+	spinner            *yacspin.Spinner
 }
 
-type OpResponseMap map[string]string
+type opResponseMap map[string]string
 
-func (op *OpBase) getName() string {
+func (op *opBase) getName() string {
 	return op.name
 }
 
-func (op *OpBase) parseAndCheckResponse(host, responseContent string, responseObj any) error {
-	err := util.GetJSONLogErrors(responseContent, &responseObj, op.name, op.log)
+func (op *opBase) setLogger(logger vlog.Printer) {
+	op.logger = logger.WithName(op.name)
+}
+
+func (op *opBase) parseAndCheckResponse(host, responseContent string, responseObj any) error {
+	err := util.GetJSONLogErrors(responseContent, &responseObj, op.name, op.logger)
 	if err != nil {
-		op.log.Error(err, "fail to parse response on host, detail", "host", host)
+		op.logger.Error(err, "fail to parse response on host, detail", "host", host, "original responseContent", responseContent)
 		return err
 	}
-	op.log.Info("JSON response", "host", host, "responseObj", responseObj)
+	op.logger.Info("JSON response", "host", host, "responseObj", responseObj)
 	return nil
 }
 
-func (op *OpBase) parseAndCheckMapResponse(host, responseContent string) (OpResponseMap, error) {
-	var responseObj OpResponseMap
+func (op *opBase) parseAndCheckMapResponse(host, responseContent string) (opResponseMap, error) {
+	var responseObj opResponseMap
 	err := op.parseAndCheckResponse(host, responseContent, &responseObj)
 
 	return responseObj, err
 }
 
-func (op *OpBase) setVersionToSemVar() {
-	op.clusterHTTPRequest.SemVar = SemVer{Ver: "1.0.0"}
+func (op *opBase) parseAndCheckStringResponse(host, responseContent string) (string, error) {
+	var responseStr string
+	err := op.parseAndCheckResponse(host, responseContent, &responseStr)
+
+	return responseStr, err
 }
 
-// TODO: implement another parse function for list response
+func (op *opBase) parseAndCheckGenericJSONResponse(host, responseContent string) (nmaGenericJSONResponse, error) {
+	var genericResponse nmaGenericJSONResponse
+	err := op.parseAndCheckResponse(host, responseContent, &genericResponse)
 
-func (op *OpBase) logResponse(host string, result HostHTTPResult) {
-	op.log.PrintInfo("[%s] result from host %s summary %s, details: %+v",
-		op.name, host, result.status.getStatusString(), result)
+	return genericResponse, err
 }
 
-func (op *OpBase) logPrepare() {
-	op.log.Info("Prepare() called", "name", op.name)
+func (op *opBase) setClusterHTTPRequestName() {
+	op.clusterHTTPRequest.Name = op.name
 }
 
-func (op *OpBase) logExecute() {
-	op.log.Info("Execute() called", "name", op.name)
+func (op *opBase) setVersionToSemVar() {
+	op.clusterHTTPRequest.SemVar = semVer{Ver: "1.0.0"}
 }
 
-func (op *OpBase) logFinalize() {
-	op.log.Info("Finalize() called", "name", op.name)
+func (op *opBase) setupBasicInfo() {
+	op.clusterHTTPRequest = clusterHTTPRequest{}
+	op.clusterHTTPRequest.RequestCollection = make(map[string]hostHTTPRequest)
+	op.setClusterHTTPRequestName()
+	op.setVersionToSemVar()
 }
 
-func (op *OpBase) runExecute(execContext *OpEngineExecContext) error {
-	err := execContext.dispatcher.sendRequest(&op.clusterHTTPRequest)
+// setupSpinner sets up the progress spinner
+func (op *opBase) setupSpinner() {
+	if op.logger.ForCli {
+		cfg := yacspin.Config{
+			Frequency:         100 * time.Millisecond,
+			CharSet:           yacspin.CharSets[11],
+			Suffix:            " " + op.description,
+			SuffixAutoColon:   true,
+			Message:           "in progress",
+			StopCharacter:     "✔",
+			StopColors:        []string{"fgGreen"},
+			StopFailCharacter: "✘",
+			StopFailMessage:   "failed",
+			StopFailColors:    []string{"fgRed"},
+			Writer:            op.logger.Writer, // if nil, writing to stdout
+		}
+		spinner, err := yacspin.New(cfg)
+		if err != nil {
+			op.logger.PrintWarning("[UI][%s] progress spinner failed to initialize: %v", op.name, err)
+			return
+		}
+		spinner.Reverse()
+		op.spinner = spinner
+	}
+}
+
+func (op *opBase) startSpinner() {
+	if op.spinner != nil {
+		err := op.spinner.Start()
+		if err != nil {
+			op.logger.PrintWarning("[UI][%s] progress spinner failed to start: %v\n", op.name, err)
+		}
+	}
+}
+
+func (op *opBase) cleanupSpinner() {
+	if op.spinner != nil && op.spinner.Status() == yacspin.SpinnerRunning {
+		err := op.spinner.Stop()
+		if err != nil {
+			op.logger.PrintWarning("[UI][%s] progress spinner failed to stop: %v\n", op.name, err)
+		}
+	}
+}
+
+func (op *opBase) updateSpinnerMessage(msg string, v ...any) {
+	if op.spinner != nil {
+		op.spinner.Message(fmt.Sprintf(msg, v...))
+	}
+}
+
+func (op *opBase) updateSpinnerStopMessage(msg string, v ...any) {
+	if op.spinner != nil {
+		op.spinner.StopMessage(fmt.Sprintf(msg, v...))
+	}
+}
+
+func (op *opBase) updateSpinnerStopFailMessage(msg string, v ...any) {
+	if op.spinner != nil {
+		op.spinner.StopFailMessage(fmt.Sprintf(msg, v...))
+	}
+}
+
+func (op *opBase) stopFailSpinner() {
+	if op.spinner != nil {
+		err := op.spinner.StopFail()
+		if err != nil {
+			op.logger.PrintWarning("Spinner error: %v", err)
+		}
+	}
+}
+
+func (op *opBase) stopFailSpinnerWithMessage(errMsg string, v ...any) {
+	if op.spinner != nil {
+		op.spinner.StopFailMessage(fmt.Sprintf(errMsg, v...))
+		op.stopFailSpinner()
+	}
+}
+
+func (op *opBase) logResponse(host string, result hostHTTPResult) {
+	if result.err != nil {
+		op.logger.PrintError("[%s] result from host %s summary %s, details: %+v",
+			op.name, host, result.status.getStatusString(), result.err)
+	} else {
+		op.logger.Log.Info("Request succeeded",
+			"op name", op.name, "host", host, "details", result)
+	}
+}
+
+func (op *opBase) logPrepare() {
+	op.logger.Info("Prepare() called", "name", op.name)
+}
+
+func (op *opBase) logExecute() {
+	op.logger.Info("Execute() called", "name", op.name)
+}
+
+func (op *opBase) logFinalize() {
+	op.logger.Info("Finalize() called", "name", op.name)
+}
+
+func (op *opBase) runExecute(execContext *opEngineExecContext) error {
+	err := execContext.dispatcher.sendRequest(&op.clusterHTTPRequest, op.spinner)
 	if err != nil {
-		op.log.Error(err, "Fail to dispatch request, detail", "dispatch request", op.clusterHTTPRequest)
+		op.logger.Error(err, "Fail to dispatch request, detail", "dispatch request", op.clusterHTTPRequest)
 		return err
 	}
 	return nil
 }
 
-// if found certs in the options, we add the certs to http requests of each instruction
-func (op *OpBase) loadCertsIfNeeded(certs *HTTPSCerts, findCertsInOptions bool) error {
-	if !findCertsInOptions {
+type opTLSOptions interface {
+	hasCerts() bool
+	getCerts() *httpsCerts
+	getTLSModes() *tlsModes
+}
+
+// applyTLSOptions processes TLS options here, like in-memory certificates or TLS modes,
+// rather than plumbing them through to every op.
+func (op *opBase) applyTLSOptions(tlsOptions opTLSOptions) error {
+	if tlsOptions == nil {
 		return nil
 	}
 
 	// this step is executed after Prepare() so all http requests should be set up
 	if len(op.clusterHTTPRequest.RequestCollection) == 0 {
-		return fmt.Errorf("[%s] has not set up a http request", op.name)
+		return fmt.Errorf("[%s] clusterHTTPRequest.RequestCollection is empty", op.name)
 	}
 
+	// retrieve certs once to avoid extra copies
+	var certs *httpsCerts
+	if tlsOptions.hasCerts() {
+		certs = tlsOptions.getCerts()
+		if certs == nil {
+			return fmt.Errorf("[%s] is trying to use certificates, but none are set", op.name)
+		}
+	}
+
+	// always retrieve TLS modes
+	tlsModes := tlsOptions.getTLSModes()
+	if tlsModes == nil {
+		return fmt.Errorf("[%s] unable to retrieve TLS modes from interface", op.name)
+	}
+
+	// modify requests with TLS options
 	for host := range op.clusterHTTPRequest.RequestCollection {
 		request := op.clusterHTTPRequest.RequestCollection[host]
-		request.UseCertsInOptions = true
-		request.Certs.key = certs.key
-		request.Certs.cert = certs.cert
-		request.Certs.caCert = certs.caCert
+		request.setCerts(certs)
+		request.setTLSMode(tlsModes)
 		op.clusterHTTPRequest.RequestCollection[host] = request
 	}
 	return nil
@@ -277,16 +436,16 @@ func (op *OpBase) loadCertsIfNeeded(certs *HTTPSCerts, findCertsInOptions bool) 
 // they can only determine at runtime where the operation is needed. One
 // instance of this is the nma_upload_config.go. If all nodes already have the
 // latest catalog information, there is nothing to be done during execution.
-func (op *OpBase) isSkipExecute() bool {
+func (op *opBase) isSkipExecute() bool {
 	return op.skipExecute
 }
 
 // hasQuorum checks if we have enough working primary nodes to maintain data integrity
 // quorumCount = (1/2 * number of primary nodes) + 1
-func (op *OpBase) hasQuorum(hostCount, primaryNodeCount uint) bool {
+func (op *opBase) hasQuorum(hostCount, primaryNodeCount uint) bool {
 	quorumCount := (primaryNodeCount + 1) / 2
 	if hostCount < quorumCount {
-		op.log.PrintError("[%s] Quorum check failed: "+
+		op.logger.PrintError("[%s] Quorum check failed: "+
 			"number of hosts with latest catalog (%d) is not "+
 			"greater than or equal to 1/2 of number of the primary nodes (%d)\n",
 			op.name, hostCount, primaryNodeCount)
@@ -297,25 +456,35 @@ func (op *OpBase) hasQuorum(hostCount, primaryNodeCount uint) bool {
 }
 
 // checkResponseStatusCode will verify if the status code in https response is a successful code
-func (op *OpBase) checkResponseStatusCode(resp httpsResponseStatus, host string) (err error) {
+func (op *opBase) checkResponseStatusCode(resp httpsResponseStatus, host string) (err error) {
 	if resp.StatusCode != respSuccStatusCode {
 		err = fmt.Errorf(`[%s] fail to execute HTTPS request on host %s, status code in HTTPS response is %d`, op.name, host, resp.StatusCode)
-		op.log.Error(err, "fail to execute HTTPS request, detail")
+		op.logger.Error(err, "fail to execute HTTPS request, detail")
 		return err
 	}
 	return nil
 }
 
+// filterUnreachableHosts filters out the unreachable hosts from the op
+// if the unreachableHosts list size > 0
+func (op *opBase) filterUnreachableHosts(execContext *opEngineExecContext) {
+	if len(execContext.unreachableHosts) == 0 {
+		return
+	}
+
+	op.hosts = util.SliceDiff(op.hosts, execContext.unreachableHosts)
+}
+
 /* Sensitive fields in request body
  */
-type SensitiveFields struct {
+type sensitiveFields struct {
 	DBPassword         string            `json:"db_password"`
 	AWSAccessKeyID     string            `json:"aws_access_key_id"`
 	AWSSecretAccessKey string            `json:"aws_secret_access_key"`
 	Parameters         map[string]string `json:"parameters"`
 }
 
-func (maskedData *SensitiveFields) maskSensitiveInfo() {
+func (maskedData *sensitiveFields) maskSensitiveInfo() {
 	const maskedValue = "******"
 	sensitiveKeyParams := map[string]bool{
 		"awsauth":                 true,
@@ -341,7 +510,7 @@ func (maskedData *SensitiveFields) maskSensitiveInfo() {
  * for the case where users do not specify a password, e.g., create db
  * we need the empty password "" string
  */
-type OpHTTPSBase struct {
+type opHTTPSBase struct {
 	useHTTPPassword bool
 	httpsPassword   *string
 	userName        string
@@ -349,7 +518,7 @@ type OpHTTPSBase struct {
 
 // we may add some common functions for OpHTTPSBase here
 
-func (opb *OpHTTPSBase) validateAndSetUsernameAndPassword(opName string, useHTTPPassword bool,
+func (opb *opHTTPSBase) validateAndSetUsernameAndPassword(opName string, useHTTPPassword bool,
 	userName string, httpsPassword *string) error {
 	opb.useHTTPPassword = useHTTPPassword
 	if opb.useHTTPPassword {
@@ -364,9 +533,97 @@ func (opb *OpHTTPSBase) validateAndSetUsernameAndPassword(opName string, useHTTP
 	return nil
 }
 
-// VClusterCommands is struct for all top-level admin commands (e.g. create db,
-// add node, etc.). This is used to pass state around for the various APIs. We
-// also use it for mocking in our unit test.
-type VClusterCommands struct {
+type ClusterCommands interface {
+	GetLog() vlog.Printer
+	V(int) logr.Logger
+	LogInfo(msg string, keysAndValues ...any)
+	LogError(err error, msg string, keysAndValues ...any)
+	PrintInfo(msg string, v ...any)
+	PrintWarning(msg string, v ...any)
+	PrintError(msg string, v ...any)
+	DisplayInfo(msg string, v ...any)
+	DisplayWarning(msg string, v ...any)
+	DisplayError(msg string, v ...any)
+
+	VAddNode(options *VAddNodeOptions) (VCoordinationDatabase, error)
+	VAddSubcluster(options *VAddSubclusterOptions) error
+	VAlterSubclusterType(options *VAlterSubclusterTypeOptions) error
+	VCheckVClusterServerPid(options *VCheckVClusterServerPidOptions) ([]string, error)
+	VCreateDatabase(options *VCreateDatabaseOptions) (VCoordinationDatabase, error)
+	VCreateArchive(options *VCreateArchiveOptions) error
+	VDropDatabase(options *VDropDatabaseOptions) error
+	VFetchCoordinationDatabase(options *VFetchCoordinationDatabaseOptions) (VCoordinationDatabase, error)
+	VFetchNodesDetails(options *VFetchNodesDetailsOptions) (NodesDetails, error)
+	VFetchNodeState(options *VFetchNodeStateOptions) ([]NodeInfo, error)
+	VGetDrainingStatus(options *VGetDrainingStatusOptions) (DrainingStatusList, error)
+	VInstallPackages(options *VInstallPackagesOptions) (*InstallPackageStatus, error)
+	VPollSubclusterState(options *VPollSubclusterStateOptions) error
+	VPromoteSandboxToMain(options *VPromoteSandboxToMainOptions) error
+	VReIP(options *VReIPOptions) error
+	VRemoveNode(options *VRemoveNodeOptions) (VCoordinationDatabase, error)
+	VRemoveSubcluster(removeScOpt *VRemoveScOptions) (VCoordinationDatabase, error)
+	VRenameSubcluster(options *VRenameSubclusterOptions) error
+	VReplicateDatabase(options *VReplicationDatabaseOptions) (int64, error)
+	VReviveDatabase(options *VReviveDatabaseOptions) (dbInfo string, vdbPtr *VCoordinationDatabase, err error)
+	VSandbox(options *VSandboxOptions) error
+	VScrutinize(options *VScrutinizeOptions) error
+	VShowRestorePoints(options *VShowRestorePointsOptions) (restorePoints []RestorePoint, err error)
+	VSaveRestorePoint(options *VSaveRestorePointOptions) (err error)
+	VStartDatabase(options *VStartDatabaseOptions) (vdbPtr *VCoordinationDatabase, err error)
+	VStartNodes(options *VStartNodesOptions) error
+	VStartSubcluster(startScOpt *VStartScOptions) error
+	VStopDatabase(options *VStopDatabaseOptions) error
+	VStopNode(options *VStopNodeOptions) error
+	VStopSubcluster(options *VStopSubclusterOptions) error
+	VUnsandbox(options *VUnsandboxOptions) error
+}
+
+type VClusterCommandsLogger struct {
 	Log vlog.Printer
+}
+
+func (vcc VClusterCommandsLogger) GetLog() vlog.Printer {
+	return vcc.Log
+}
+
+func (vcc VClusterCommandsLogger) V(level int) logr.Logger {
+	return vcc.Log.V(level)
+}
+
+func (vcc VClusterCommandsLogger) LogInfo(msg string, keysAndValues ...any) {
+	vcc.Log.Info(msg, keysAndValues...)
+}
+
+func (vcc VClusterCommandsLogger) LogError(err error, msg string, keysAndValues ...any) {
+	vcc.Log.Error(err, msg, keysAndValues...)
+}
+
+func (vcc VClusterCommandsLogger) PrintInfo(msg string, v ...any) {
+	vcc.Log.PrintInfo(msg, v...)
+}
+
+func (vcc VClusterCommandsLogger) PrintWarning(msg string, v ...any) {
+	vcc.Log.PrintWarning(msg, v...)
+}
+
+func (vcc VClusterCommandsLogger) PrintError(msg string, v ...any) {
+	vcc.Log.PrintError(msg, v...)
+}
+
+func (vcc VClusterCommandsLogger) DisplayInfo(msg string, v ...any) {
+	vcc.Log.DisplayInfo(msg, v...)
+}
+
+func (vcc VClusterCommandsLogger) DisplayWarning(msg string, v ...any) {
+	vcc.Log.DisplayWarning(msg, v...)
+}
+
+func (vcc VClusterCommandsLogger) DisplayError(msg string, v ...any) {
+	vcc.Log.DisplayError(msg, v...)
+}
+
+// VClusterCommands passes state around for all top-level administrator commands
+// (e.g. create db, add node, etc.).
+type VClusterCommands struct {
+	VClusterCommandsLogger
 }

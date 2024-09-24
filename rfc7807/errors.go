@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -92,6 +92,11 @@ var (
 		"Internal error while persisting spread encryption key",
 		http.StatusInternalServerError,
 	)
+	GenericShowRestorePointsFailure = newProblemID(
+		path.Join(errorEndpointsPrefix, "internal-show-restore-points-failure"),
+		"Internal error while showing restore points",
+		http.StatusInternalServerError,
+	)
 	SubclusterNotFound = newProblemID(
 		path.Join(errorEndpointsPrefix, "subcluster-not-found"),
 		"Subcluster is not found",
@@ -150,6 +155,101 @@ var (
 	InternalVerticaDownloadFileFailure = newProblemID(
 		path.Join(errorEndpointsPrefix, "internal-vertica-download-file-failure"),
 		"Internal error while running Vertica download file",
+		http.StatusInternalServerError,
+	)
+	CreateDirectoryPermissionDenied = newProblemID(
+		path.Join(errorEndpointsPrefix, "create-directory-permission-denied"),
+		"Permission denied while creating directories",
+		http.StatusInternalServerError,
+	)
+	CreateDirectoryExistError = newProblemID(
+		path.Join(errorEndpointsPrefix, "create-directory-exist-error"),
+		"Directories already exist while creating directories",
+		http.StatusInternalServerError,
+	)
+	CreateDirectoryInvalidPath = newProblemID(
+		path.Join(errorEndpointsPrefix, "create-directory-invalid-path"),
+		"Found invalid directory paths while creating directories",
+		http.StatusBadRequest,
+	)
+	CreateDirectoryParentDirectoryExists = newProblemID(
+		path.Join(errorEndpointsPrefix, "create-directory-parent-directory-exists"),
+		"Parent directories already exist while creating directories",
+		http.StatusInternalServerError,
+	)
+	CreateDirectoryParentDirectoryNoWritePermission = newProblemID(
+		path.Join(errorEndpointsPrefix, "create-directory-parent-directory-no-write-permission"),
+		"No write permission on parent directories while creating directories",
+		http.StatusInternalServerError,
+	)
+	CreateDirectoryNoWritePermission = newProblemID(
+		path.Join(errorEndpointsPrefix, "create-directory-no-write-permission"),
+		"No write permission on directories while creating directories",
+		http.StatusInternalServerError,
+	)
+	NonAbsolutePathError = newProblemID(
+		path.Join(errorEndpointsPrefix, "non-absolute-path-error"),
+		"Target path is not an absolute path",
+		http.StatusBadRequest,
+	)
+	AuthenticationError = newProblemID(
+		path.Join(errorEndpointsPrefix, "unauthorized-request"),
+		"Unauthorized-request",
+		http.StatusUnauthorized,
+	)
+	CatalogPathNotExistError = newProblemID(
+		path.Join(errorEndpointsPrefix, "catalog-path-not-exist-error"),
+		"Target path does not exist",
+		http.StatusBadRequest,
+	)
+	InvalidCatalogPathError = newProblemID(
+		path.Join(errorEndpointsPrefix, "invalid-catalog-path"),
+		"Invalid catalog path",
+		http.StatusBadRequest,
+	)
+	CECatalogContentDirEmptyError = newProblemID(
+		path.Join(errorEndpointsPrefix, "catalog-content-dir-empty-error"),
+		"Target directory is empty",
+		http.StatusInternalServerError,
+	)
+	CECatalogContentDirNotExistError = newProblemID(
+		path.Join(errorEndpointsPrefix, "catalog-content-dir-not-exist-error"),
+		"Target directory does not exist",
+		http.StatusInternalServerError,
+	)
+	GenericStartNodeError = newProblemID(
+		path.Join(errorEndpointsPrefix, "start-node-command-failure-error"),
+		"Start node command execution failed",
+		http.StatusInternalServerError,
+	)
+	GenericOpenFileError = newProblemID(
+		path.Join(errorEndpointsPrefix, "open-file-failure-error"),
+		"Failed to open file",
+		http.StatusInternalServerError,
+	)
+	GenericReadFileError = newProblemID(
+		path.Join(errorEndpointsPrefix, "read-file-failure-error"),
+		"Failed to read file",
+		http.StatusInternalServerError,
+	)
+	GenericWriteFileError = newProblemID(
+		path.Join(errorEndpointsPrefix, "write-file-failure-error"),
+		"Failed to write file",
+		http.StatusInternalServerError,
+	)
+	GenericCreateFileError = newProblemID(
+		path.Join(errorEndpointsPrefix, "create-file-failure-error"),
+		"Failed to create file",
+		http.StatusInternalServerError,
+	)
+	MessageQueueFull = newProblemID(
+		path.Join(errorEndpointsPrefix, "message-queue-full"),
+		"Message queue is full",
+		http.StatusInternalServerError,
+	)
+	FetchDownDatabase = newProblemID(
+		path.Join(errorEndpointsPrefix, "fetch-down-database"),
+		"Fetch information from a down database",
 		http.StatusInternalServerError,
 	)
 )

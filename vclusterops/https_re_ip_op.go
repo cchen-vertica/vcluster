@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -22,22 +22,36 @@ import (
 	"github.com/vertica/vcluster/vclusterops/util"
 )
 
-type httpsReIPOp struct {
-	OpBase
-	OpHTTPSBase
-	hostToReIP    []string
-	reIPList      map[string]ReIPInfo
-	nodeNamesList []string
-	upHosts       []string
+// ReIPNoClusterQuorumError is an error to indicate
+// that cluster quorum was lost before a re-ip.
+// This is emitted from this op. Callers can do type checking to perform an
+// action based on the error.
+type ReIPNoClusterQuorumError struct {
+	Detail string
 }
 
-func makeHTTPSReIPOp(nodeNamesList, hostToReIP []string,
+func (e *ReIPNoClusterQuorumError) Error() string {
+	return e.Detail
+}
+
+type httpsReIPOp struct {
+	opBase
+	opHTTPSBase
+	hostToReIP          []string
+	reIPList            map[string]ReIPInfo
+	nodeNamesToReIP     []string
+	forStartNodeCommand bool
+}
+
+func makeHTTPSReIPOp(nodeNamesToReIP, hostToReIP []string,
 	useHTTPPassword bool, userName string, httpsPassword *string) (httpsReIPOp, error) {
 	op := httpsReIPOp{}
 	op.name = "HTTPSReIpOp"
+	op.description = "Change host IPs in the catalog"
 	op.useHTTPPassword = useHTTPPassword
-	op.nodeNamesList = nodeNamesList
+	op.nodeNamesToReIP = nodeNamesToReIP
 	op.hostToReIP = hostToReIP
+	op.forStartNodeCommand = true
 
 	if useHTTPPassword {
 		err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
@@ -52,19 +66,26 @@ func makeHTTPSReIPOp(nodeNamesList, hostToReIP []string,
 	return op, nil
 }
 
-func (op *httpsReIPOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
+func makeHTTPSReIPOpWithHosts(hosts, nodeNamesToReIP, hostToReIP []string,
+	useHTTPPassword bool, userName string, httpsPassword *string) (httpsReIPOp, error) {
+	op, err := makeHTTPSReIPOp(nodeNamesToReIP, hostToReIP, useHTTPPassword, userName, httpsPassword)
+	if err != nil {
+		return op, err
+	}
+	op.forStartNodeCommand = false
+	op.hosts = hosts
+	return op, nil
+}
 
-	for i, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+func (op *httpsReIPOp) setupClusterHTTPRequest(hostsToReIP []string) error {
+	for i, host := range hostsToReIP {
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PutMethod
 		nodesInfo, ok := op.reIPList[host]
 		if !ok {
 			return fmt.Errorf("[%s] cannot find node information for address %s", op.name, host)
 		}
-		httpRequest.BuildHTTPSEndpoint("nodes/" + nodesInfo.NodeName + "/ip")
+		httpRequest.buildHTTPSEndpoint(util.NodesEndpoint + nodesInfo.NodeName + "/ip")
 		httpRequest.QueryParams = make(map[string]string)
 		httpRequest.QueryParams["host"] = nodesInfo.TargetAddress
 		httpRequest.QueryParams["control-host"] = nodesInfo.TargetControlAddress
@@ -74,17 +95,17 @@ func (op *httpsReIPOp) setupClusterHTTPRequest(hosts []string) error {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
 		}
-		op.clusterHTTPRequest.RequestCollection[op.upHosts[i]] = httpRequest
+		op.clusterHTTPRequest.RequestCollection[op.hosts[i]] = httpRequest
 	}
 
 	return nil
 }
 
-func (op *httpsReIPOp) prepare(execContext *OpEngineExecContext) error {
+func (op *httpsReIPOp) prepare(execContext *opEngineExecContext) error {
 	op.reIPList = make(map[string]ReIPInfo)
 	// update reIPList from input node names and execContext.networkProfiles
-	for i := 0; i < len(op.nodeNamesList); i++ {
-		nodeNameToReIP := op.nodeNamesList[i]
+	for i := 0; i < len(op.nodeNamesToReIP); i++ {
+		nodeNameToReIP := op.nodeNamesToReIP[i]
 		targetAddress := op.hostToReIP[i]
 		profile, ok := execContext.networkProfiles[targetAddress]
 		if !ok {
@@ -99,13 +120,16 @@ func (op *httpsReIPOp) prepare(execContext *OpEngineExecContext) error {
 		op.reIPList[nodeNameToReIP] = info
 	}
 
+	// when there isn't any incoming hosts,
 	// use up hosts to execute the HTTP re-IP endpoint
-	op.upHosts = execContext.upHosts
-	execContext.dispatcher.Setup(op.upHosts)
-	return op.setupClusterHTTPRequest(op.nodeNamesList)
+	if len(op.hosts) == 0 {
+		op.hosts = execContext.upHosts
+	}
+	execContext.dispatcher.setup(op.hosts)
+	return op.setupClusterHTTPRequest(op.nodeNamesToReIP)
 }
 
-func (op *httpsReIPOp) execute(execContext *OpEngineExecContext) error {
+func (op *httpsReIPOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -113,12 +137,12 @@ func (op *httpsReIPOp) execute(execContext *OpEngineExecContext) error {
 	return op.processResult(execContext)
 }
 
-func (op *httpsReIPOp) processResult(_ *OpEngineExecContext) error {
+func (op *httpsReIPOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
-		if result.IsUnauthorizedRequest() {
+		if result.isUnauthorizedRequest() {
 			return fmt.Errorf("[%s] wrong password/certificate for https service on host %s",
 				op.name, host)
 		}
@@ -154,6 +178,6 @@ func (op *httpsReIPOp) processResult(_ *OpEngineExecContext) error {
 	return allErrs
 }
 
-func (op *httpsReIPOp) finalize(_ *OpEngineExecContext) error {
+func (op *httpsReIPOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }

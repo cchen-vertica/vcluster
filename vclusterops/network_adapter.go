@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -17,7 +17,7 @@ package vclusterops
 
 import "net/http"
 
-type Adapter interface {
-	sendRequest(*HostHTTPRequest, chan<- HostHTTPResult)
-	generateResult(*http.Response) HostHTTPResult
+type adapter interface {
+	sendRequest(*hostHTTPRequest, chan<- hostHTTPResult)
+	generateResult(*http.Response) hostHTTPResult
 }

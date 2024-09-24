@@ -5,13 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-type NMADeleteDirectoriesOp struct {
-	OpBase
+const (
+	delDirOpName = "NMADeleteDirectoriesOp"
+	delDirOpDesc = "Delete database directories"
+)
+
+type nmaDeleteDirectoriesOp struct {
+	opBase
 	hostRequestBodyMap map[string]string
+	sandbox            bool
+	forceDelete        bool
 }
 
 type deleteDirParams struct {
@@ -21,30 +26,43 @@ type deleteDirParams struct {
 }
 
 func makeNMADeleteDirectoriesOp(
-	log vlog.Printer,
 	vdb *VCoordinationDatabase,
 	forceDelete bool,
-) (NMADeleteDirectoriesOp, error) {
-	nmaDeleteDirectoriesOp := NMADeleteDirectoriesOp{}
-	nmaDeleteDirectoriesOp.name = "NMADeleteDirectoriesOp"
-	nmaDeleteDirectoriesOp.log = log.WithName(nmaDeleteDirectoriesOp.name)
-	nmaDeleteDirectoriesOp.hosts = vdb.HostList
-
-	err := nmaDeleteDirectoriesOp.buildRequestBody(vdb, forceDelete)
+) (nmaDeleteDirectoriesOp, error) {
+	op := nmaDeleteDirectoriesOp{}
+	op.name = delDirOpName
+	op.description = delDirOpDesc
+	op.hosts = vdb.HostList
+	op.sandbox = false
+	err := op.buildRequestBody(vdb, forceDelete)
 	if err != nil {
-		return nmaDeleteDirectoriesOp, err
+		return op, err
 	}
 
-	return nmaDeleteDirectoriesOp, nil
+	return op, nil
+}
+func makeNMADeleteDirsSandboxOp(
+	hosts []string,
+	forceDelete bool,
+	sandbox bool,
+) (nmaDeleteDirectoriesOp, error) {
+	op := nmaDeleteDirectoriesOp{}
+	op.name = delDirOpName
+	op.description = delDirOpDesc
+	op.sandbox = sandbox
+	op.forceDelete = forceDelete
+	op.hosts = hosts
+	return op, nil
 }
 
-func (op *NMADeleteDirectoriesOp) buildRequestBody(
+func (op *nmaDeleteDirectoriesOp) buildRequestBody(
 	vdb *VCoordinationDatabase,
 	forceDelete bool,
 ) error {
 	op.hostRequestBodyMap = make(map[string]string)
 	for h, vnode := range vdb.HostNodeMap {
 		p := deleteDirParams{}
+
 		// directories
 		p.Directories = append(p.Directories, vnode.CatalogPath)
 		p.Directories = append(p.Directories, vnode.StorageLocations...)
@@ -60,10 +78,7 @@ func (op *NMADeleteDirectoriesOp) buildRequestBody(
 
 		// force-delete
 		p.ForceDelete = forceDelete
-
-		// TODO: we don't have functionality of sandboxing at this time
-		// we will update this once it's available
-		p.Sandbox = false
+		p.Sandbox = op.sandbox
 
 		dataBytes, err := json.Marshal(p)
 		if err != nil {
@@ -71,35 +86,56 @@ func (op *NMADeleteDirectoriesOp) buildRequestBody(
 		}
 		op.hostRequestBodyMap[h] = string(dataBytes)
 
-		op.log.Info("delete directory params", "host", h, "params", p)
+		op.logger.Info("delete directory params", "host", h, "params", p)
 	}
 
 	return nil
 }
 
-func (op *NMADeleteDirectoriesOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
+func (op *nmaDeleteDirectoriesOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.BuildNMAEndpoint("directories/delete")
+		httpRequest.buildNMAEndpoint("directories/delete")
 		httpRequest.RequestData = op.hostRequestBodyMap[host]
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
 	}
-
 	return nil
 }
 
-func (op *NMADeleteDirectoriesOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+func (op *nmaDeleteDirectoriesOp) prepare(execContext *opEngineExecContext) error {
+	if op.sandbox {
+		if len(execContext.scNodesInfo) == 0 {
+			return fmt.Errorf(`[%s] Cannot find any node information of target subcluster in OpEngineExecContext`, op.name)
+		}
+		hosts := []string{}
+		op.hostRequestBodyMap = make(map[string]string)
+
+		for _, node := range execContext.scNodesInfo {
+			p := deleteDirParams{}
+			p.Directories = append(p.Directories, node.CatalogPath)
+			p.ForceDelete = true
+			p.Sandbox = op.sandbox
+			dataBytes, err := json.Marshal(p)
+			if err != nil {
+				return fmt.Errorf("[%s] fail to marshal request data to JSON string, detail: %w", op.name, err)
+			}
+			op.hostRequestBodyMap[node.Address] = string(dataBytes)
+
+			op.logger.Info("delete directory params", "host", node.Address, "params", p)
+
+			hosts = append(hosts, node.Address)
+		}
+		if len(op.hosts) == 0 {
+			op.hosts = hosts
+		}
+	}
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *NMADeleteDirectoriesOp) execute(execContext *OpEngineExecContext) error {
+func (op *nmaDeleteDirectoriesOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -107,11 +143,11 @@ func (op *NMADeleteDirectoriesOp) execute(execContext *OpEngineExecContext) erro
 	return op.processResult(execContext)
 }
 
-func (op *NMADeleteDirectoriesOp) finalize(_ *OpEngineExecContext) error {
+func (op *nmaDeleteDirectoriesOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }
 
-func (op *NMADeleteDirectoriesOp) processResult(_ *OpEngineExecContext) error {
+func (op *nmaDeleteDirectoriesOp) processResult(_ *opEngineExecContext) error {
 	var allErrs error
 
 	for host, result := range op.clusterHTTPRequest.ResultCollection {

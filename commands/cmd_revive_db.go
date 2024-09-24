@@ -1,9 +1,24 @@
+/*
+ (c) Copyright [2023-2024] Open Text.
+ Licensed under the Apache License, Version 2.0 (the "License");
+ You may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+ http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+*/
+
 package commands
 
 import (
-	"flag"
 	"strconv"
 
+	"github.com/spf13/cobra"
 	"github.com/vertica/vcluster/vclusterops"
 	"github.com/vertica/vcluster/vclusterops/util"
 	"github.com/vertica/vcluster/vclusterops/vlog"
@@ -15,110 +30,171 @@ import (
  */
 type CmdReviveDB struct {
 	CmdBase
-	reviveDBOptions     *vclusterops.VReviveDatabaseOptions
-	configurationParams *string // raw input from user, need further processing
+	reviveDBOptions *vclusterops.VReviveDatabaseOptions
 }
 
-func makeCmdReviveDB() *CmdReviveDB {
+func makeCmdReviveDB() *cobra.Command {
 	// CmdReviveDB
 	newCmd := &CmdReviveDB{}
+	opt := vclusterops.VReviveDBOptionsFactory()
+	newCmd.reviveDBOptions = &opt
 
-	// parser, used to parse command-line flags
-	newCmd.parser = flag.NewFlagSet("revive_db", flag.ExitOnError)
-	reviveDBOptions := vclusterops.VReviveDBOptionsFactory()
+	cmd := makeBasicCobraCmd(
+		newCmd,
+		reviveDBSubCmd,
+		"Revive or restores an Eon Mod database.",
+		`Revives or restores an Eon Mode database. You cannot revive sandboxes with this command.
 
-	// require flags
-	reviveDBOptions.DBName = newCmd.parser.String("db-name", "", "The name of the database to revive")
-	newCmd.hostListStr = newCmd.parser.String("hosts", "", "Comma-separated hosts that participate in the database")
-	reviveDBOptions.CommunalStorageLocation = newCmd.parser.String("communal-storage-location", "",
-		util.GetEonFlagMsg("Location of communal storage"))
+If access to communal storage requires access keys, you must provide the keys with the --config-param option.
 
-	// optional flags
-	newCmd.ipv6 = newCmd.parser.Bool("ipv6", false, util.GetOptionalFlagMsg("Revive database with IPv6 hosts"))
-	newCmd.configurationParams = newCmd.parser.String("config-param", "", util.GetOptionalFlagMsg(
-		"Comma-separated list of NAME=VALUE pairs for configuration parameters"))
-	reviveDBOptions.ForceRemoval = newCmd.parser.Bool("force-removal", false,
-		util.GetOptionalFlagMsg("Force removal of existing database directories(exclude user storage directories) before reviving the database"))
-	reviveDBOptions.LoadCatalogTimeout = newCmd.parser.Uint("load-catalog-timeout", util.DefaultLoadCatalogTimeoutSeconds,
-		util.GetOptionalFlagMsg("Set a timeout (in seconds) for loading remote catalog operation, default timeout is "+
-			strconv.Itoa(util.DefaultLoadCatalogTimeoutSeconds)+"seconds"))
-	reviveDBOptions.DisplayOnly = newCmd.parser.Bool("display-only", false,
-		util.GetOptionalFlagMsg("Describe the database on communal storage, and exit"))
-	reviveDBOptions.IgnoreClusterLease = newCmd.parser.Bool("ignore-cluster-lease", false,
-		util.GetOptionalFlagMsg("Ignore the check of other clusters running on the same communal storage."+
-			" The communal storage can be corrupted when two clusters modified it at the same time. Proceed with caution"))
+Examples:
+  # Revive a database with user input and save the generated config file
+  # under the given directory
+  vcluster revive_db --db-name test_db \
+    --hosts 10.20.30.40,10.20.30.41,10.20.30.42 \
+    --communal-storage-location /communal \
+    --config /opt/vertica/config/vertica_cluster.yaml
 
-	newCmd.reviveDBOptions = &reviveDBOptions
+  # Describe the database only when reviving the database
+  vcluster revive_db --db-name test_db --communal-storage-location /communal \
+    --display-only
 
-	newCmd.parser.Usage = func() {
-		util.SetParserUsage(newCmd.parser, "revive_db")
-	}
-	return newCmd
+  # Revive a database with user input by restoring to a given restore point
+  vcluster revive_db --db-name test_db \
+    --hosts 10.20.30.40,10.20.30.41,10.20.30.42 \
+    --communal-storage-location /communal \
+    --config /opt/vertica/config/vertica_cluster.yaml --force-removal \
+    --ignore-cluster-lease --restore-point-archive db --restore-point-index 1
+
+`,
+		[]string{dbNameFlag, hostsFlag, ipv6Flag, communalStorageLocationFlag, configFlag, outputFileFlag, configParamFlag},
+	)
+
+	// local flags
+	newCmd.setLocalFlags(cmd)
+
+	// require db-name and communal-storage-location
+	markFlagsRequired(cmd, dbNameFlag, communalStorageLocationFlag)
+
+	return cmd
 }
 
-func (c *CmdReviveDB) CommandType() string {
-	return "revive_db"
+// setLocalFlags will set the local flags the command has
+func (c *CmdReviveDB) setLocalFlags(cmd *cobra.Command) {
+	cmd.Flags().UintVar(
+		&c.reviveDBOptions.LoadCatalogTimeout,
+		"load-catalog-timeout",
+		util.DefaultLoadCatalogTimeoutSeconds,
+		"The timeout, in seconds, for loading the remote catalog. Default: "+
+			strconv.Itoa(util.DefaultLoadCatalogTimeoutSeconds),
+	)
+	cmd.Flags().BoolVar(
+		&c.reviveDBOptions.ForceRemoval,
+		"force-removal",
+		false,
+		"Deletes any existing database directories before reviving, excluding user storage directories.",
+	)
+	cmd.Flags().BoolVar(
+		&c.reviveDBOptions.DisplayOnly,
+		"display-only",
+		false,
+		"Shows information about the database in communal storage. If you specify this option, you can omit --hosts.",
+	)
+	cmd.Flags().BoolVar(
+		&c.reviveDBOptions.IgnoreClusterLease,
+		"ignore-cluster-lease",
+		false,
+		"Do not check for the existence of other clusters running on shared storage.\n"+
+			"If another system is using the same communal storage, using this option results in data corruption.",
+	)
+	cmd.Flags().StringVar(
+		&c.reviveDBOptions.RestorePoint.Archive,
+		"restore-point-archive",
+		"",
+		"Name of the restore archive to use for bootstrapping",
+	)
+	cmd.Flags().IntVar(
+		&c.reviveDBOptions.RestorePoint.Index,
+		"restore-point-index",
+		0,
+		"The index of the restore point in the restore archive to restore from. Restore point indexes are one-indexed.",
+	)
+	cmd.Flags().StringVar(
+		&c.reviveDBOptions.RestorePoint.ID,
+		"restore-point-id",
+		"",
+		"The identifier of the restore point in the restore archive.",
+	)
+	// only one of restore-point-index or restore-point-id" will be required
+	cmd.MarkFlagsMutuallyExclusive("restore-point-index", "restore-point-id")
 }
 
-func (c *CmdReviveDB) Parse(inputArgv []string, log vlog.Printer) error {
+func (c *CmdReviveDB) Parse(inputArgv []string, logger vlog.Printer) error {
 	c.argv = inputArgv
-	err := c.ValidateParseMaskedArgv(c.CommandType(), log)
-	if err != nil {
-		return err
-	}
+	logger.LogArgParse(&c.argv)
 
-	// for some options, we do not want to use their default values,
-	// if they are not provided in cli,
-	// reset the value of those options to nil
-	if !util.IsOptionSet(c.parser, "ipv6") {
-		c.CmdBase.ipv6 = nil
-	}
-
-	return c.validateParse(log)
+	return c.validateParse(logger)
 }
 
-func (c *CmdReviveDB) validateParse(log vlog.Printer) error {
-	log.Info("Called validateParse()")
+func (c *CmdReviveDB) validateParse(logger vlog.Printer) error {
+	logger.Info("Called validateParse()")
 
-	// check the format of configuration params string, and parse it into configParams
-	configurationParams, err := util.ParseConfigParams(*c.configurationParams)
-	if err != nil {
-		return err
-	}
-	if configurationParams != nil {
-		c.reviveDBOptions.ConfigurationParameters = configurationParams
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.reviveDBOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 
 	// when --display-only is provided, we do not need to parse some base options like hostListStr
-	if *c.reviveDBOptions.DisplayOnly {
+	if c.reviveDBOptions.DisplayOnly {
 		return nil
 	}
 
-	// will remove this after we refined config file read
-	*c.reviveDBOptions.HonorUserInput = true
-
-	return c.ValidateParseBaseOptions(&c.reviveDBOptions.DatabaseOptions)
-}
-
-func (c *CmdReviveDB) Analyze(log vlog.Printer) error {
-	log.Info("Called method Analyze()")
-	return nil
-}
-
-func (c *CmdReviveDB) Run(vcc vclusterops.VClusterCommands) error {
-	vcc.Log.V(1).Info("Called method Run()")
-	dbInfo, err := vcc.VReviveDatabase(c.reviveDBOptions)
+	err := c.ValidateParseBaseOptions(&c.reviveDBOptions.DatabaseOptions)
 	if err != nil {
-		vcc.Log.Error(err, "fail to revive database", "DBName", *c.reviveDBOptions.DBName)
 		return err
 	}
 
-	if *c.reviveDBOptions.DisplayOnly {
-		vcc.Log.PrintInfo("database details:\n%s", dbInfo)
+	err = c.setConfigParam(&c.reviveDBOptions.DatabaseOptions)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *CmdReviveDB) Run(vcc vclusterops.ClusterCommands) error {
+	vcc.LogInfo("Called method Run()")
+	dbInfo, vdb, err := vcc.VReviveDatabase(c.reviveDBOptions)
+	if err != nil {
+		vcc.LogError(err, "failed to revive the database", "DBName", c.reviveDBOptions.DBName)
+		return err
+	}
+
+	if c.reviveDBOptions.DisplayOnly {
+		c.writeCmdOutputToFile(globals.file, []byte(dbInfo), vcc.GetLog())
+		vcc.LogInfo("Database details: ", "db-info", dbInfo)
 		return nil
 	}
 
-	vcc.Log.PrintInfo("Successfully revived database %s", *c.reviveDBOptions.DBName)
+	vcc.DisplayInfo("Successfully revived database %s", c.reviveDBOptions.DBName)
 
+	// write db info to vcluster config file
+	vdb.FirstStartAfterRevive = true
+	err = writeConfig(vdb, true /*forceOverwrite*/)
+	if err != nil {
+		vcc.DisplayWarning("Failed to write the configuration file: %s", err)
+	}
+
+	// write config parameters to vcluster config param file
+	err = c.writeConfigParam(c.reviveDBOptions.ConfigurationParameters, true /*forceOverwrite*/)
+	if err != nil {
+		vcc.DisplayWarning("Failed to write the configuration parameter file: %s", err)
+	}
 	return nil
+}
+
+// SetDatabaseOptions will assign a vclusterops.DatabaseOptions instance to the one in CmdReviveDB
+func (c *CmdReviveDB) SetDatabaseOptions(opt *vclusterops.DatabaseOptions) {
+	c.reviveDBOptions.DatabaseOptions = *opt
 }

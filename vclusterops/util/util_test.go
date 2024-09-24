@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -27,6 +28,8 @@ import (
 )
 
 type NMAHealthOpResponse map[string]string
+
+const InvalChar = "invalid character in "
 
 func redirectLog() (*bytes.Buffer, vlog.Printer) {
 	// redirect log to a local bytes.Buffer
@@ -108,6 +111,13 @@ func TestResolveToOneIP(t *testing.T) {
 	res, err = ResolveToOneIP(hostname, false)
 	assert.NotNil(t, err)
 	assert.Equal(t, res, "")
+
+	// given IP does not match its IP version
+	_, err = ResolveToOneIP("192.168.1.101", true)
+	assert.ErrorContains(t, err, "cannot resolve 192.168.1.101 as IPv6 address")
+
+	_, err = ResolveToOneIP("2001:db8::8:800:200c:417a", false)
+	assert.ErrorContains(t, err, "cannot resolve 2001:db8::8:800:200c:417a as IPv4 address")
 }
 
 func TestGetCleanPath(t *testing.T) {
@@ -141,19 +151,19 @@ func TestGetCleanPath(t *testing.T) {
 	assert.Equal(t, res, "/data")
 }
 
-func TestSplitHosts(t *testing.T) {
+func TestParseHostList(t *testing.T) {
 	// positive case
-	hosts := "vnode1, vnode2"
-	res, err := SplitHosts(hosts)
-	expected := []string{"vnode1", "vnode2"}
+	hosts := []string{" vnode1 ", " vnode2", "vnode3 ", "  "}
+	err := ParseHostList(&hosts)
+	expected := []string{"vnode1", "vnode2", "vnode3"}
 	assert.Nil(t, err)
-	assert.Equal(t, res, expected)
+	assert.Equal(t, hosts, expected)
 
 	// negative case
-	hosts = " "
-	res, err = SplitHosts(hosts)
+	hosts = []string{"  "}
+	err = ParseHostList(&hosts)
 	assert.NotNil(t, err)
-	assert.Equal(t, res, []string{})
+	assert.Equal(t, err.Error(), "must specify a host or host list")
 }
 
 type testStruct struct {
@@ -186,6 +196,14 @@ func TestSliceDiff(t *testing.T) {
 	b := []string{"1", "3", "4"}
 	expected := []string{"2"}
 	actual := SliceDiff(a, b)
+	assert.Equal(t, expected, actual)
+}
+
+func TestSliceCommon(t *testing.T) {
+	a := []string{"3", "5", "4", "1", "2"}
+	b := []string{"5", "6", "7", "4", "3"}
+	expected := []string{"3", "4", "5"}
+	actual := SliceCommon(a, b)
 	assert.Equal(t, expected, actual)
 }
 
@@ -241,58 +259,112 @@ func TestNewErrorFormatVerb(t *testing.T) {
 	assert.EqualError(t, oldErr3, newErr3.Error())
 }
 
-func TestValidateDBName(t *testing.T) {
+func TestValidateName(t *testing.T) {
 	// positive cases
 	obj := "database"
-	err := ValidateName("test_db", obj)
+	err := ValidateName("test_db", obj, false)
 	assert.Nil(t, err)
 
-	err = ValidateName("db1", obj)
+	err = ValidateName("db1", obj, false)
 	assert.Nil(t, err)
 
 	// negative cases
-	err = ValidateName("test$db", obj)
-	assert.ErrorContains(t, err, "invalid character in "+obj+" name: $")
+	err = ValidateName("test$db", obj, false)
+	assert.ErrorContains(t, err, InvalChar+obj+" name: $")
 
-	err = ValidateName("[db1]", obj)
-	assert.ErrorContains(t, err, "invalid character in "+obj+" name: [")
+	err = ValidateName("[db1]", obj, false)
+	assert.ErrorContains(t, err, InvalChar+obj+" name: [")
 
-	err = ValidateName("!!??!!db1", obj)
-	assert.ErrorContains(t, err, "invalid character in "+obj+" name: !")
+	err = ValidateName("!!??!!db1", obj, false)
+	assert.ErrorContains(t, err, InvalChar+obj+" name: !")
+
+	err = ValidateName("test-db", obj, false)
+	assert.ErrorContains(t, err, InvalChar+obj+" name: -")
+
+	err = ValidateName("test-db", obj, true)
+	assert.Nil(t, err)
+
+	err = ValidateName("0test-db", obj, true)
+	assert.Nil(t, err)
 }
 
-func TestSetOptFlagHelpMsg(t *testing.T) {
-	msg := "The name of the database to be created"
-	finalMsg := "The name of the database to be created [Optional]"
-	assert.Equal(t, GetOptionalFlagMsg(msg), finalMsg)
+func TestValidateQualifiedObjectNamePattern(t *testing.T) {
+	// positive cases
+	obj := "schema.database"
+	err := ValidateQualifiedObjectNamePattern(obj, true)
+	assert.Nil(t, err)
+
+	obj = "schema.*"
+	err = ValidateQualifiedObjectNamePattern(obj, true)
+	assert.Nil(t, err)
+
+	obj = "*.database"
+	err = ValidateQualifiedObjectNamePattern(obj, true)
+	assert.Nil(t, err)
+
+	obj = "valid.valid,valid.valid"
+	err = ValidateQualifiedObjectNamePattern(obj, true)
+	assert.Nil(t, err)
+
+	const matchAnySchemaTable = "*.*"
+	err = ValidateQualifiedObjectNamePattern(matchAnySchemaTable, true)
+	assert.Nil(t, err)
+
+	const matchAnyTable = "*"
+	err = ValidateQualifiedObjectNamePattern(matchAnyTable, true)
+	assert.Nil(t, err)
+
+	obj = ".namespace.*.*"
+	err = ValidateQualifiedObjectNamePattern(obj, true)
+	assert.Nil(t, err)
+
+	obj = ".namespace.schema.table"
+	err = ValidateQualifiedObjectNamePattern(obj, false)
+	assert.Nil(t, err)
+
+	// negative cases
+
+	const (
+		invalidCharacter = "invalid character in pattern "
+		invalidPattern   = "invalid pattern "
+	)
+
+	obj = "v_invalid.valid"
+	err = ValidateQualifiedObjectNamePattern(obj, true)
+	assert.ErrorContains(t, err, invalidCharacter+obj+": v_invalid.valid")
+
+	obj = "valid.valid,v_invalid_name.valid"
+	err = ValidateQualifiedObjectNamePattern(obj, true)
+	assert.ErrorContains(t, err, invalidCharacter+obj+": v_invalid_name.valid")
+
+	obj = `valid.v_invalid_TO_loooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo
+	oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo
+	oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooong`
+	err = ValidateQualifiedObjectNamePattern(obj, true)
+	assert.ErrorContains(t, err, "pattern is too long "+obj+
+		`: valid.v_invalid_TO_loooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo
+	oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo
+	oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooong`)
+
+	obj = "no_leading_dot.*.*"
+	err = ValidateQualifiedObjectNamePattern(obj, true)
+	assert.ErrorContains(t, err, invalidPattern+obj+": no_leading_dot.*.*")
+
+	obj = ".wildcards.*.*"
+	err = ValidateQualifiedObjectNamePattern(obj, false)
+	assert.ErrorContains(t, err, invalidPattern+obj+": .wildcards.*.*")
+
+	err = ValidateQualifiedObjectNamePattern(matchAnySchemaTable, false)
+	assert.ErrorContains(t, err, invalidPattern+matchAnySchemaTable+": *.*")
+
+	err = ValidateQualifiedObjectNamePattern(matchAnyTable, false)
+	assert.ErrorContains(t, err, invalidPattern+matchAnyTable+": *")
 }
 
 func TestSetEonFlagHelpMsg(t *testing.T) {
 	msg := "Path to depot directory"
 	finalMsg := "[Eon only] Path to depot directory"
 	assert.Equal(t, GetEonFlagMsg(msg), finalMsg)
-}
-
-func TestParseConfigParams(t *testing.T) {
-	configParamsListStr := ""
-	configParams, err := ParseConfigParams(configParamsListStr)
-	assert.Nil(t, err)
-	assert.Nil(t, configParams)
-
-	configParamsListStr = "key1=val1,key2"
-	configParams, err = ParseConfigParams(configParamsListStr)
-	assert.NotNil(t, err)
-	assert.Nil(t, configParams)
-
-	configParamsListStr = "key1=val1,=val2"
-	configParams, err = ParseConfigParams(configParamsListStr)
-	assert.NotNil(t, err)
-	assert.Nil(t, configParams)
-
-	configParamsListStr = "key1=val1,key2=val2"
-	configParams, err = ParseConfigParams(configParamsListStr)
-	assert.Nil(t, err)
-	assert.ObjectsAreEqualValues(configParams, map[string]string{"key1": "val1", "key2": "val2"})
 }
 
 func TestGenVNodeName(t *testing.T) {
@@ -340,6 +412,18 @@ func TestValidateCommunalStorageLocation(t *testing.T) {
 	err := ValidateCommunalStorageLocation("")
 	assert.Error(t, err)
 
+	// no error for a valid s3 location
+	err = ValidateCommunalStorageLocation("s3://vertica-fleeting/k8s/revive_eon_5")
+	assert.NoError(t, err)
+
+	// no error for a valid local location
+	err = ValidateCommunalStorageLocation("/communal/vert/k8s/revive_eon_5")
+	assert.NoError(t, err)
+
+	// return error for a non-absolute local path
+	err = ValidateCommunalStorageLocation("~/test_folder/test")
+	assert.Error(t, err)
+
 	// return error for an invalid s3 location with ":"
 	err = ValidateCommunalStorageLocation("s3:vertica-fleeting/k8s/revive_eon_5")
 	assert.Error(t, err)
@@ -348,11 +432,60 @@ func TestValidateCommunalStorageLocation(t *testing.T) {
 	err = ValidateCommunalStorageLocation("s3:/vertica-fleeting/k8s/revive_eon_5")
 	assert.Error(t, err)
 
-	// no error for an valid s3 location
-	err = ValidateCommunalStorageLocation("s3://vertica-fleeting/k8s/revive_eon_5")
+	// return error for an invalid s3 location with ":///"
+	err = ValidateCommunalStorageLocation("s3:///vertica-fleeting/k8s/revive_eon_5")
+	assert.Error(t, err)
+
+	// return error for an invalid s3 location with "//" as the path separator
+	err = ValidateCommunalStorageLocation("s3://vertica-fleeting//k8s/revive_eon_5")
+	assert.Error(t, err)
+
+	// return error for an invalid s3 location with "///" as the path separator
+	err = ValidateCommunalStorageLocation("s3://vertica-fleeting///k8s/revive_eon_5")
+	assert.Error(t, err)
+}
+
+func TestIsEmptyOrValidTimeStr(t *testing.T) {
+	const layout = "2006-01-02 15:04:05.000000"
+	testTimeString := ""
+
+	// positive cases
+	_, err := IsEmptyOrValidTimeStr(layout, testTimeString)
 	assert.NoError(t, err)
 
-	// no error for an valid local location
-	err = ValidateCommunalStorageLocation("/communal/vert/k8s/revive_eon_5")
+	testTimeString = "2023-05-02 14:10:31.038289"
+	_, err = IsEmptyOrValidTimeStr(layout, testTimeString)
 	assert.NoError(t, err)
+
+	// negative case
+	testTimeString = "invalid time"
+	_, err = IsEmptyOrValidTimeStr(layout, testTimeString)
+	assert.ErrorContains(t, err, "cannot parse")
+}
+
+func TestGetEnvInt(t *testing.T) {
+	key := "TEST_ENV_INT"
+	fallback := 123
+	// positive case: environment variable exists and is a valid integer
+	os.Setenv(key, "456")
+	actual := GetEnvInt(key, fallback)
+	assert.Equal(t, 456, actual)
+
+	// negative case: environment variable does not exist
+	os.Unsetenv(key)
+	actual = GetEnvInt(key, fallback)
+	assert.Equal(t, fallback, actual)
+
+	// negative case: environment variable exists but is not a valid integer
+	os.Setenv(key, "not_an_integer")
+	actual = GetEnvInt(key, fallback)
+	assert.Equal(t, fallback, actual)
+}
+
+func TestGetClusterName(t *testing.T) {
+	cluster := GetClusterName("")
+	assert.Equal(t, "main cluster", cluster)
+
+	cluster = GetClusterName("sand1")
+	assert.Equal(t, "sandbox sand1", cluster)
 }

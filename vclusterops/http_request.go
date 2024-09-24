@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -15,7 +15,7 @@
 
 package vclusterops
 
-type HostHTTPRequest struct {
+type hostHTTPRequest struct {
 	Method       string
 	Endpoint     string
 	IsNMACommand bool
@@ -27,29 +27,63 @@ type HostHTTPRequest struct {
 	Timeout  int     // optional, set it if an Op needs longer time to complete
 
 	// optional, for calling NMA/Vertica HTTPS endpoints. If Username/Password is set, that takes precedence over this for HTTPS calls.
-	UseCertsInOptions bool
-	Certs             HTTPSCerts
+	UseCertsInOptions   bool
+	Certs               httpsCerts
+	TLSDoVerify         bool
+	TLSDoVerifyHostname bool
 }
 
-type HTTPSCerts struct {
+type httpsCerts struct {
 	key    string
 	cert   string
 	caCert string
 }
 
-func (req *HostHTTPRequest) BuildNMAEndpoint(url string) {
+type tlsModes struct {
+	doVerifyNMAServerCert    bool
+	doVerifyHTTPSServerCert  bool
+	doVerifyPeerCertHostname bool
+}
+
+func (req *hostHTTPRequest) setCerts(certs *httpsCerts) {
+	if certs == nil {
+		return
+	}
+	req.UseCertsInOptions = true
+	req.Certs.key = certs.key
+	req.Certs.cert = certs.cert
+	req.Certs.caCert = certs.caCert
+}
+
+func (req *hostHTTPRequest) setTLSMode(modes *tlsModes) {
+	if modes == nil {
+		return
+	}
+	if req.IsNMACommand {
+		req.TLSDoVerify = modes.doVerifyNMAServerCert
+	} else {
+		req.TLSDoVerify = modes.doVerifyHTTPSServerCert
+	}
+	// only do hostname validation if regular validation is enabled
+	if req.TLSDoVerify {
+		req.TLSDoVerifyHostname = modes.doVerifyPeerCertHostname
+	}
+}
+
+func (req *hostHTTPRequest) buildNMAEndpoint(url string) {
 	req.IsNMACommand = true
 	req.Endpoint = NMACurVersion + url
 }
 
-func (req *HostHTTPRequest) BuildHTTPSEndpoint(url string) {
+func (req *hostHTTPRequest) buildHTTPSEndpoint(url string) {
 	req.IsNMACommand = false
 	req.Endpoint = HTTPCurVersion + url
 }
 
 // this is used as the "ATModuleBase" in Admintools
-type ClusterHTTPRequest struct {
-	RequestCollection map[string]HostHTTPRequest
-	ResultCollection  map[string]HostHTTPResult
-	SemVar            SemVer
+type clusterHTTPRequest struct {
+	RequestCollection map[string]hostHTTPRequest
+	ResultCollection  map[string]hostHTTPResult
+	SemVar            semVer
+	Name              string
 }

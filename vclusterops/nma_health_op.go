@@ -1,5 +1,5 @@
 /*
- (c) Copyright [2023] Open Text.
+ (c) Copyright [2023-2024] Open Text.
  Licensed under the Apache License, Version 2.0 (the "License");
  You may not use this file except in compliance with the License.
  You may obtain a copy of the License at
@@ -17,45 +17,53 @@ package vclusterops
 
 import (
 	"errors"
-
-	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-type NMAHealthOp struct {
-	OpBase
+// we limit the health check timeout to 30 seconds
+// we believe that this is enough to test the NMA connection
+const nmaHealthCheckTimeout = 30
+
+type nmaHealthOp struct {
+	opBase
+	// sometimes, we need to skip unreachable hosts
+	// e.g., list_all_nodes may need this when the host(s) are not connectable
+	skipUnreachableHost bool
 }
 
-func makeNMAHealthOp(log vlog.Printer, hosts []string) NMAHealthOp {
-	nmaHealthOp := NMAHealthOp{}
-	nmaHealthOp.name = "NMAHealthOp"
-	nmaHealthOp.log = log.WithName(nmaHealthOp.name)
-	nmaHealthOp.hosts = hosts
-	return nmaHealthOp
+func makeNMAHealthOp(hosts []string) nmaHealthOp {
+	op := nmaHealthOp{}
+	op.name = "NMAHealthOp"
+	op.description = "Check NMA service health"
+	op.hosts = hosts
+	return op
+}
+
+func makeNMAHealthOpSkipUnreachable(hosts []string) nmaHealthOp {
+	op := makeNMAHealthOp(hosts)
+	op.skipUnreachableHost = true
+	return op
 }
 
 // setupClusterHTTPRequest works as the module setup in Admintools
-func (op *NMAHealthOp) setupClusterHTTPRequest(hosts []string) error {
-	op.clusterHTTPRequest = ClusterHTTPRequest{}
-	op.clusterHTTPRequest.RequestCollection = make(map[string]HostHTTPRequest)
-	op.setVersionToSemVar()
-
+func (op *nmaHealthOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
-		httpRequest := HostHTTPRequest{}
+		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = GetMethod
-		httpRequest.BuildNMAEndpoint("health")
+		httpRequest.buildNMAEndpoint("health")
+		httpRequest.Timeout = nmaHealthCheckTimeout
 		op.clusterHTTPRequest.RequestCollection[host] = httpRequest
 	}
 
 	return nil
 }
 
-func (op *NMAHealthOp) prepare(execContext *OpEngineExecContext) error {
-	execContext.dispatcher.Setup(op.hosts)
+func (op *nmaHealthOp) prepare(execContext *opEngineExecContext) error {
+	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
 }
 
-func (op *NMAHealthOp) execute(execContext *OpEngineExecContext) error {
+func (op *nmaHealthOp) execute(execContext *opEngineExecContext) error {
 	if err := op.runExecute(execContext); err != nil {
 		return err
 	}
@@ -63,12 +71,13 @@ func (op *NMAHealthOp) execute(execContext *OpEngineExecContext) error {
 	return op.processResult(execContext)
 }
 
-func (op *NMAHealthOp) finalize(_ *OpEngineExecContext) error {
+func (op *nmaHealthOp) finalize(_ *opEngineExecContext) error {
 	return nil
 }
 
-func (op *NMAHealthOp) processResult(_ *OpEngineExecContext) error {
+func (op *nmaHealthOp) processResult(execContext *opEngineExecContext) error {
 	var allErrs error
+	var unreachableHosts []string
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
@@ -78,8 +87,17 @@ func (op *NMAHealthOp) processResult(_ *OpEngineExecContext) error {
 				return errors.Join(allErrs, err)
 			}
 		} else {
+			unreachableHosts = append(unreachableHosts, host)
 			allErrs = errors.Join(allErrs, result.err)
 		}
+	}
+
+	if op.skipUnreachableHost {
+		execContext.unreachableHosts = unreachableHosts
+		if len(unreachableHosts) > 0 {
+			op.stopFailSpinnerWithMessage("warning! hosts %v are unreachable", unreachableHosts)
+		}
+		return nil
 	}
 
 	return allErrs
