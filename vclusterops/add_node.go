@@ -187,6 +187,7 @@ func (vcc VClusterCommands) VAddNode(options *VAddNodeOptions) (VCoordinationDat
 	}
 
 	vcc.Log.Info("caitest3", "host node map", vdb.HostNodeMap)
+	vcc.Log.Info("caitest3 full vdb", "vdb", vdb)
 	// add_node is aborted if requirements are not met.
 	// Here we check whether the nodes being added already exist
 	err = checkAddNodeRequirements(&vdb, options.NewHosts)
@@ -199,6 +200,7 @@ func (vcc VClusterCommands) VAddNode(options *VAddNodeOptions) (VCoordinationDat
 		return vdb, err
 	}
 
+	vcc.Log.Info("caitest4 full vdb", "vdb", vdb)
 	vcc.Log.Info("caitest4", "host node map", vdb.HostNodeMap)
 	instructions, err := vcc.produceAddNodeInstructions(&vdb, options)
 	if err != nil {
