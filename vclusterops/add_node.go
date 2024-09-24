@@ -156,11 +156,14 @@ func (vcc VClusterCommands) VAddNode(options *VAddNodeOptions) (VCoordinationDat
 		return vdb, err
 	}
 
+	vcc.Log.Info("caitest1", "host node map", vdb.HostNodeMap)
+
 	err = options.completeVDBSetting(&vdb)
 	if err != nil {
 		return vdb, err
 	}
 
+	vcc.Log.Info("caitest2", "host node map", vdb.HostNodeMap)
 	if vdb.IsEon {
 		// checking this here because now we have got eon value from
 		// the running db.
@@ -183,6 +186,7 @@ func (vcc VClusterCommands) VAddNode(options *VAddNodeOptions) (VCoordinationDat
 		return vdb, err
 	}
 
+	vcc.Log.Info("caitest3", "host node map", vdb.HostNodeMap)
 	// add_node is aborted if requirements are not met.
 	// Here we check whether the nodes being added already exist
 	err = checkAddNodeRequirements(&vdb, options.NewHosts)
@@ -195,6 +199,7 @@ func (vcc VClusterCommands) VAddNode(options *VAddNodeOptions) (VCoordinationDat
 		return vdb, err
 	}
 
+	vcc.Log.Info("caitest4", "host node map", vdb.HostNodeMap)
 	instructions, err := vcc.produceAddNodeInstructions(&vdb, options)
 	if err != nil {
 		return vdb, fmt.Errorf("fail to produce add node instructions, %w", err)
