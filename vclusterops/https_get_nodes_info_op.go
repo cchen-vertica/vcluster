@@ -140,28 +140,19 @@ func (op *httpsGetNodesInfoOp) processResult(_ *opEngineExecContext) error {
 			// save nodes info to vdb
 			op.vdb.HostNodeMap = makeVHostNodeMap()
 			op.vdb.HostList = []string{}
+			op.vdb.PrimaryUpNodes = []string{}
+			op.vdb.UnboundNodes = []*VCoordinationNode{}
 			for _, node := range nodesStates.NodeList {
 				if node.Database != op.dbName {
 					err = fmt.Errorf(`[%s] database %s is running on host %s, rather than database %s`, op.name, node.Database, host, op.dbName)
 					allErrs = errors.Join(allErrs, err)
 					return appendHTTPSFailureError(allErrs)
 				}
-				vNode := makeVCoordinationNode()
-				vNode.Name = node.Name
-				vNode.Address = node.Address
-				vNode.CatalogPath = node.CatalogPath
-				vNode.DepotPath = node.DepotPath
-				vNode.StorageLocations = node.StorageLocations
-				vNode.IsPrimary = node.IsPrimary
-				vNode.State = node.State
-				vNode.Subcluster = node.Subcluster
-				vNode.Sandbox = node.Sandbox
-				vNode.IsControlNode = node.IsControlNode
-				vNode.ControlNode = node.ControlNode
+				vnode := buildVnodeFromNodeStateInfo(node)
 				if node.IsPrimary && node.State == util.NodeUpState {
 					op.vdb.PrimaryUpNodes = append(op.vdb.PrimaryUpNodes, node.Address)
 				}
-				err := op.vdb.addNode(&vNode)
+				err := op.vdb.addNode(&vnode)
 				if err != nil {
 					allErrs = errors.Join(allErrs, err)
 					return appendHTTPSFailureError(allErrs)
@@ -186,4 +177,21 @@ func (op *httpsGetNodesInfoOp) processResult(_ *opEngineExecContext) error {
 
 func (op *httpsGetNodesInfoOp) finalize(_ *opEngineExecContext) error {
 	return nil
+}
+
+func buildVnodeFromNodeStateInfo(node *nodeStateInfo) VCoordinationNode {
+	vnode := makeVCoordinationNode()
+	vnode.Name = node.Name
+	vnode.Address = node.Address
+	vnode.CatalogPath = node.CatalogPath
+	vnode.DepotPath = node.DepotPath
+	vnode.StorageLocations = node.StorageLocations
+	vnode.IsPrimary = node.IsPrimary
+	vnode.State = node.State
+	vnode.Subcluster = node.Subcluster
+	vnode.Sandbox = node.Sandbox
+	vnode.IsControlNode = node.IsControlNode
+	vnode.ControlNode = node.ControlNode
+
+	return vnode
 }

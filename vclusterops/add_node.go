@@ -377,7 +377,10 @@ func (vcc VClusterCommands) produceAddNodeInstructions(vdb *VCoordinationDatabas
 
 	// this is a copy of the original HostNodeMap that only
 	// contains the hosts to add.
+	vcc.Log.Info("caitest", "new hosts", options.NewHosts)
+	vcc.Log.Info("caitest", "original host node map", vdb.HostNodeMap)
 	newHostNodeMap := vdb.copyHostNodeMap(options.NewHosts)
+	vcc.Log.Info("caitest", "host node map", newHostNodeMap)
 	nmaPrepareDirectoriesOp, err := makeNMAPrepareDirectoriesOp(newHostNodeMap,
 		options.ForceRemoval /*force cleanup*/, false /*for db revive*/)
 	if err != nil {
