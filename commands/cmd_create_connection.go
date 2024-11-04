@@ -16,11 +16,18 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"github.com/vertica/vcluster/vclusterops"
 	"github.com/vertica/vcluster/vclusterops/vlog"
+)
+
+const (
+	dotYaml = ".yaml"
+	dotYml  = ".yml"
 )
 
 /* CmdCreateConnection
@@ -36,17 +43,14 @@ func makeCmdCreateConnection() *cobra.Command {
 	newCmd := &CmdCreateConnection{}
 	opt := vclusterops.VReplicationDatabaseFactory()
 	newCmd.connectionOptions = &opt
-	opt.TargetPassword = new(string)
+	opt.TargetDB.Password = new(string)
 
 	cmd := makeBasicCobraCmd(
 		newCmd,
 		createConnectionSubCmd,
-		"create the content of the connection file",
-		`This subcommand is used to create the content of the connection file. 
-
-You must specify the database name and host list. If the database has a 
-password, you need to provide password. If the database uses 
-trust authentication, the password can be ignored.
+		"Creates a file with connection information for the target database.",
+		`Creates a file with connection information for the target database. 
+The generated connection file should be used with the replication command.
 
 Examples:
   # create the connection file to /tmp/vertica_connection.yaml
@@ -59,49 +63,64 @@ Examples:
 	// local flags
 	newCmd.setLocalFlags(cmd)
 
-	markFlagsRequired(cmd, []string{dbNameFlag, hostsFlag, connFlag})
+	markFlagsRequired(cmd, dbNameFlag, hostsFlag, connFlag)
 	return cmd
 }
 
 // setLocalFlags will set the local flags the command has
 func (c *CmdCreateConnection) setLocalFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(
-		&c.connectionOptions.TargetDB,
+		&c.connectionOptions.TargetDB.DBName,
 		dbNameFlag,
 		"",
-		"The name of the database",
+		"The name of the database. You should only use this option if you want to override the database name in your configuration file.",
 	)
 	cmd.Flags().StringSliceVar(
-		&c.connectionOptions.TargetHosts,
+		&c.connectionOptions.TargetDB.Hosts,
 		hostsFlag,
 		[]string{},
-		"Comma-separated list of hosts in database")
+		"A comma-separated list of hosts in database.")
 	cmd.Flags().StringVar(
-		&c.connectionOptions.TargetUserName,
+		&c.connectionOptions.TargetDB.UserName,
 		dbUserFlag,
 		"",
-		"The username for connecting to the database",
+		"The name of the user in the target database.",
 	)
 	//  password flags
 	cmd.Flags().StringVar(
-		c.connectionOptions.TargetPassword,
+		c.connectionOptions.TargetDB.Password,
 		passwordFileFlag,
 		"",
-		"Path to the file to read the password from. ",
+		"The absolute path to a file containing the password to the target database.",
 	)
 	cmd.Flags().StringVar(
 		&globals.connFile,
 		connFlag,
 		"",
-		"Path to the connection file")
+		"The absolute path to the connection file in yaml format.")
 	markFlagsFileName(cmd, map[string][]string{connFlag: {"yaml"}})
 }
 
 func (c *CmdCreateConnection) Parse(inputArgv []string, logger vlog.Printer) error {
 	c.argv = inputArgv
 	logger.LogMaskedArgParse(c.argv)
+	return c.validateParse(logger)
+}
 
-	return nil
+func (c *CmdCreateConnection) validateParse(logger vlog.Printer) error {
+	if !filepath.IsAbs(globals.connFile) {
+		filePathError := errors.New(
+			"Invalid connection file path: " + globals.connFile + ". The connection file path must be absolute.")
+		logger.Error(filePathError, "Connection file path error:")
+		return filePathError
+	}
+	ext := filepath.Ext(globals.connFile)
+	if ext != dotYaml && ext != dotYml {
+		fileTypeError := errors.New("Invalid file type: " + ext + ". Only .yaml or .yml is allowed.")
+		logger.Error(fileTypeError, "Connection file type error:")
+		return fileTypeError
+	}
+	return c.ValidateParseBaseOptions(&c.connectionOptions.DatabaseOptions)
 }
 
 func (c *CmdCreateConnection) Run(vcc vclusterops.ClusterCommands) error {
@@ -110,9 +129,9 @@ func (c *CmdCreateConnection) Run(vcc vclusterops.ClusterCommands) error {
 	// write target db info to vcluster connection file
 	err := writeConn(c.connectionOptions)
 	if err != nil {
-		return fmt.Errorf("fail to write connection file, details: %s", err)
+		return fmt.Errorf("failed to write the connection file: %w", err)
 	}
-	fmt.Printf("Successfully write connection file in %s", globals.connFile)
+	vcc.DisplayInfo("Successfully wrote the connection file in %s", globals.connFile)
 	return nil
 }
 

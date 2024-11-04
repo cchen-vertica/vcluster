@@ -43,9 +43,10 @@ type resultStatus int
 var wrongCredentialErrMsg = []string{"Wrong password", "Wrong certificate"}
 
 const (
-	SUCCESS   resultStatus = 0
-	FAILURE   resultStatus = 1
-	EXCEPTION resultStatus = 2
+	SUCCESS      resultStatus = 0
+	FAILURE      resultStatus = 1
+	EXCEPTION    resultStatus = 2
+	EOFEXCEPTION resultStatus = 3
 )
 
 const (
@@ -64,16 +65,18 @@ const (
 )
 
 const (
-	SuccessResult   = "SUCCESS"
-	FailureResult   = "FAILURE"
-	ExceptionResult = "FAILURE"
+	SuccessResult      = "SUCCESS"
+	FailureResult      = "FAILURE"
+	ExceptionResult    = "EXCEPTION"
+	EOFExceptionResult = "EOF_EXCEPTION"
 )
 
 const (
-	SuccessCode        = 200
-	MultipleChoiceCode = 300
-	UnauthorizedCode   = 401
-	InternalErrorCode  = 500
+	SuccessCode            = 200
+	MultipleChoiceCode     = 300
+	UnauthorizedCode       = 401
+	PreconditionFailedCode = 412
+	InternalErrorCode      = 500
 )
 
 // hostHTTPResult is used to save result of an Adapter's sendRequest(...) function
@@ -83,7 +86,7 @@ type hostHTTPResult struct {
 	statusCode int
 	host       string
 	content    string
-	err        error // This is set if the http response ends in a failure scenario
+	err        error // This is set if the http response with a status code that is not 2XX
 }
 
 type httpsResponseStatus struct {
@@ -95,11 +98,15 @@ const respSuccStatusCode = 0
 // The HTTP response with a 401 status code can have several scenarios:
 // 1. Wrong password
 // 2. Wrong certificate
-// 3. The local node has not yet joined the cluster; the HTTP server will accept connections once the node joins the cluster.
-// HTTPCheckDBRunningOp in create_db need to check all scenarios to see any HTTP running
-// For HTTPSPollNodeStateOp in start_db, it requires only handling the first and second scenarios
+// HTTPCheckDBRunningOp in create_db and HTTPSPollNodeStateOp in start_db need to handle these scenarios
 func (hostResult *hostHTTPResult) isUnauthorizedRequest() bool {
 	return hostResult.statusCode == UnauthorizedCode
+}
+
+// The HTTP response with a 412 may happen if
+// the local node has not yet joined the cluster; the HTTP server will accept connections once the node joins the cluster.
+func (hostResult *hostHTTPResult) hasPreconditionFailed() bool {
+	return hostResult.statusCode == PreconditionFailedCode
 }
 
 // isSuccess returns true if status code is 200
@@ -127,12 +134,14 @@ func (hostResult *hostHTTPResult) isInternalError() bool {
 }
 
 func (hostResult *hostHTTPResult) isHTTPRunning() bool {
-	if hostResult.isPassing() || hostResult.isUnauthorizedRequest() || hostResult.isInternalError() {
+	if hostResult.isPassing() || hostResult.isUnauthorizedRequest() ||
+		hostResult.isInternalError() || hostResult.hasPreconditionFailed() {
 		return true
 	}
 	return false
 }
 
+// HTTP status code >= 200 and < 300
 func (hostResult *hostHTTPResult) isPassing() bool {
 	return hostResult.err == nil
 }
@@ -155,12 +164,18 @@ func (hostResult *hostHTTPResult) isTimeout() bool {
 	return false
 }
 
+func (hostResult *hostHTTPResult) isEOF() bool {
+	return hostResult.status == EOFEXCEPTION
+}
+
 // getStatusString converts ResultStatus to string
 func (status resultStatus) getStatusString() string {
 	if status == FAILURE {
 		return FailureResult
 	} else if status == EXCEPTION {
 		return ExceptionResult
+	} else if status == EOFEXCEPTION {
+		return EOFExceptionResult
 	}
 	return SuccessResult
 }
@@ -188,8 +203,9 @@ type clusterOp interface {
 	logExecute()
 	logFinalize()
 	setupBasicInfo()
-	loadCertsIfNeeded(certs *httpsCerts, findCertsInOptions bool) error
+	applyTLSOptions(tlsOptions opTLSOptions) error
 	isSkipExecute() bool
+	filterUnreachableHosts(execContext *opEngineExecContext)
 }
 
 /* Cluster ops basic fields and functions
@@ -220,7 +236,7 @@ func (op *opBase) setLogger(logger vlog.Printer) {
 func (op *opBase) parseAndCheckResponse(host, responseContent string, responseObj any) error {
 	err := util.GetJSONLogErrors(responseContent, &responseObj, op.name, op.logger)
 	if err != nil {
-		op.logger.Error(err, "fail to parse response on host, detail", "host", host)
+		op.logger.Error(err, "fail to parse response on host, detail", "host", host, "original responseContent", responseContent)
 		return err
 	}
 	op.logger.Info("JSON response", "host", host, "responseObj", responseObj)
@@ -232,6 +248,20 @@ func (op *opBase) parseAndCheckMapResponse(host, responseContent string) (opResp
 	err := op.parseAndCheckResponse(host, responseContent, &responseObj)
 
 	return responseObj, err
+}
+
+func (op *opBase) parseAndCheckStringResponse(host, responseContent string) (string, error) {
+	var responseStr string
+	err := op.parseAndCheckResponse(host, responseContent, &responseStr)
+
+	return responseStr, err
+}
+
+func (op *opBase) parseAndCheckGenericJSONResponse(host, responseContent string) (nmaGenericJSONResponse, error) {
+	var genericResponse nmaGenericJSONResponse
+	err := op.parseAndCheckResponse(host, responseContent, &genericResponse)
+
+	return genericResponse, err
 }
 
 func (op *opBase) setClusterHTTPRequestName() {
@@ -263,6 +293,7 @@ func (op *opBase) setupSpinner() {
 			StopFailCharacter: "✘",
 			StopFailMessage:   "failed",
 			StopFailColors:    []string{"fgRed"},
+			Writer:            op.logger.Writer, // if nil, writing to stdout
 		}
 		spinner, err := yacspin.New(cfg)
 		if err != nil {
@@ -357,27 +388,44 @@ func (op *opBase) runExecute(execContext *opEngineExecContext) error {
 	return nil
 }
 
-// if found certs in the options, we add the certs to http requests of each instruction
-func (op *opBase) loadCertsIfNeeded(certs *httpsCerts, findCertsInOptions bool) error {
-	if !findCertsInOptions {
+type opTLSOptions interface {
+	hasCerts() bool
+	getCerts() *httpsCerts
+	getTLSModes() *tlsModes
+}
+
+// applyTLSOptions processes TLS options here, like in-memory certificates or TLS modes,
+// rather than plumbing them through to every op.
+func (op *opBase) applyTLSOptions(tlsOptions opTLSOptions) error {
+	if tlsOptions == nil {
 		return nil
 	}
 
 	// this step is executed after Prepare() so all http requests should be set up
 	if len(op.clusterHTTPRequest.RequestCollection) == 0 {
-		return fmt.Errorf("[%s] has not set up a http request", op.name)
+		return fmt.Errorf("[%s] clusterHTTPRequest.RequestCollection is empty", op.name)
 	}
 
-	if certs == nil {
-		return fmt.Errorf("[%s] is trying to use certificates, but none are set", op.name)
+	// retrieve certs once to avoid extra copies
+	var certs *httpsCerts
+	if tlsOptions.hasCerts() {
+		certs = tlsOptions.getCerts()
+		if certs == nil {
+			return fmt.Errorf("[%s] is trying to use certificates, but none are set", op.name)
+		}
 	}
 
+	// always retrieve TLS modes
+	tlsModes := tlsOptions.getTLSModes()
+	if tlsModes == nil {
+		return fmt.Errorf("[%s] unable to retrieve TLS modes from interface", op.name)
+	}
+
+	// modify requests with TLS options
 	for host := range op.clusterHTTPRequest.RequestCollection {
 		request := op.clusterHTTPRequest.RequestCollection[host]
-		request.UseCertsInOptions = true
-		request.Certs.key = certs.key
-		request.Certs.cert = certs.cert
-		request.Certs.caCert = certs.caCert
+		request.setCerts(certs)
+		request.setTLSMode(tlsModes)
 		op.clusterHTTPRequest.RequestCollection[host] = request
 	}
 	return nil
@@ -415,6 +463,16 @@ func (op *opBase) checkResponseStatusCode(resp httpsResponseStatus, host string)
 		return err
 	}
 	return nil
+}
+
+// filterUnreachableHosts filters out the unreachable hosts from the op
+// if the unreachableHosts list size > 0
+func (op *opBase) filterUnreachableHosts(execContext *opEngineExecContext) {
+	if len(execContext.unreachableHosts) == 0 {
+		return
+	}
+
+	op.hosts = util.SliceDiff(op.hosts, execContext.unreachableHosts)
 }
 
 /* Sensitive fields in request body
@@ -483,29 +541,42 @@ type ClusterCommands interface {
 	PrintInfo(msg string, v ...any)
 	PrintWarning(msg string, v ...any)
 	PrintError(msg string, v ...any)
+	DisplayInfo(msg string, v ...any)
+	DisplayWarning(msg string, v ...any)
+	DisplayError(msg string, v ...any)
 
 	VAddNode(options *VAddNodeOptions) (VCoordinationDatabase, error)
-	VStopNode(options *VStopNodeOptions) error
 	VAddSubcluster(options *VAddSubclusterOptions) error
+	VAlterSubclusterType(options *VAlterSubclusterTypeOptions) error
+	VCheckVClusterServerPid(options *VCheckVClusterServerPidOptions) ([]string, error)
 	VCreateDatabase(options *VCreateDatabaseOptions) (VCoordinationDatabase, error)
+	VCreateArchive(options *VCreateArchiveOptions) error
 	VDropDatabase(options *VDropDatabaseOptions) error
+	VFetchCoordinationDatabase(options *VFetchCoordinationDatabaseOptions) (VCoordinationDatabase, error)
+	VFetchNodesDetails(options *VFetchNodesDetailsOptions) (NodesDetails, error)
 	VFetchNodeState(options *VFetchNodeStateOptions) ([]NodeInfo, error)
+	VGetDrainingStatus(options *VGetDrainingStatusOptions) (DrainingStatusList, error)
 	VInstallPackages(options *VInstallPackagesOptions) (*InstallPackageStatus, error)
+	VPollSubclusterState(options *VPollSubclusterStateOptions) error
+	VPromoteSandboxToMain(options *VPromoteSandboxToMainOptions) error
 	VReIP(options *VReIPOptions) error
 	VRemoveNode(options *VRemoveNodeOptions) (VCoordinationDatabase, error)
 	VRemoveSubcluster(removeScOpt *VRemoveScOptions) (VCoordinationDatabase, error)
+	VRenameSubcluster(options *VRenameSubclusterOptions) error
+	VReplicateDatabase(options *VReplicationDatabaseOptions) (int64, error)
+	VReplicationStatus(options *VReplicationStatusDatabaseOptions) (*ReplicationStatusResponse, error)
 	VReviveDatabase(options *VReviveDatabaseOptions) (dbInfo string, vdbPtr *VCoordinationDatabase, err error)
 	VSandbox(options *VSandboxOptions) error
 	VScrutinize(options *VScrutinizeOptions) error
 	VShowRestorePoints(options *VShowRestorePointsOptions) (restorePoints []RestorePoint, err error)
+	VSaveRestorePoint(options *VSaveRestorePointOptions) (err error)
 	VStartDatabase(options *VStartDatabaseOptions) (vdbPtr *VCoordinationDatabase, err error)
 	VStartNodes(options *VStartNodesOptions) error
+	VStartSubcluster(startScOpt *VStartScOptions) (VCoordinationDatabase, error)
 	VStopDatabase(options *VStopDatabaseOptions) error
-	VReplicateDatabase(options *VReplicationDatabaseOptions) error
-	VFetchCoordinationDatabase(options *VFetchCoordinationDatabaseOptions) (VCoordinationDatabase, error)
-	VUnsandbox(options *VUnsandboxOptions) error
+	VStopNode(options *VStopNodeOptions) error
 	VStopSubcluster(options *VStopSubclusterOptions) error
-	VFetchNodesDetails(options *VFetchNodesDetailsOptions) (NodesDetails, error)
+	VUnsandbox(options *VUnsandboxOptions) error
 }
 
 type VClusterCommandsLogger struct {
@@ -538,6 +609,18 @@ func (vcc VClusterCommandsLogger) PrintWarning(msg string, v ...any) {
 
 func (vcc VClusterCommandsLogger) PrintError(msg string, v ...any) {
 	vcc.Log.PrintError(msg, v...)
+}
+
+func (vcc VClusterCommandsLogger) DisplayInfo(msg string, v ...any) {
+	vcc.Log.DisplayInfo(msg, v...)
+}
+
+func (vcc VClusterCommandsLogger) DisplayWarning(msg string, v ...any) {
+	vcc.Log.DisplayWarning(msg, v...)
+}
+
+func (vcc VClusterCommandsLogger) DisplayError(msg string, v ...any) {
+	vcc.Log.DisplayError(msg, v...)
 }
 
 // VClusterCommands passes state around for all top-level administrator commands

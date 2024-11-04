@@ -18,8 +18,8 @@ package vclusterops
 import (
 	"errors"
 	"fmt"
-	"strings"
 
+	"github.com/vertica/vcluster/rfc7807"
 	"github.com/vertica/vcluster/vclusterops/util"
 )
 
@@ -99,8 +99,9 @@ func (op *httpsGetNodesInfoOp) shouldUseResponse(host string, nodesStates *nodes
 	if responseSandbox != "" && !op.allowUseSandboxResponse {
 		return false
 	}
+
 	// continue to parse next response if a response from a different sandbox is expected
-	if op.sandbox != AnySandbox && responseSandbox != op.sandbox {
+	if op.sandbox != AnySandbox && responseSandbox != op.sandbox && op.sandbox != util.MainClusterSandbox {
 		return false
 	}
 	return true
@@ -111,9 +112,17 @@ func (op *httpsGetNodesInfoOp) processResult(_ *opEngineExecContext) error {
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
+		// A host may have precondition failed, such as
+		// "Local node has not joined cluster yet, HTTP server will accept connections when the node has joined the cluster"
+		// In this case, we skip use the information from that host
+		if result.hasPreconditionFailed() {
+			continue
+		}
+
 		if result.isUnauthorizedRequest() {
-			return fmt.Errorf("[%s] wrong password/certificate for https service on host %s",
+			detail := fmt.Sprintf("[%s] wrong password/certificate for https service on host %s",
 				op.name, host)
+			return rfc7807.New(rfc7807.AuthenticationError).WithHost(host).WithDetail(detail)
 		}
 
 		if result.isPassing() {
@@ -130,39 +139,33 @@ func (op *httpsGetNodesInfoOp) processResult(_ *opEngineExecContext) error {
 			// save nodes info to vdb
 			op.vdb.HostNodeMap = makeVHostNodeMap()
 			op.vdb.HostList = []string{}
+			op.vdb.PrimaryUpNodes = []string{}
+			op.vdb.ComputeNodes = []string{}
+			op.vdb.UnboundNodes = []*VCoordinationNode{}
 			for _, node := range nodesStates.NodeList {
 				if node.Database != op.dbName {
 					err = fmt.Errorf(`[%s] database %s is running on host %s, rather than database %s`, op.name, node.Database, host, op.dbName)
 					allErrs = errors.Join(allErrs, err)
 					return appendHTTPSFailureError(allErrs)
 				}
-				vNode := makeVCoordinationNode()
-				vNode.Name = node.Name
-				vNode.Address = node.Address
-				vNode.CatalogPath = node.CatalogPath
-				vNode.DepotPath = node.DepotPath
-				vNode.StorageLocations = node.StorageLocations
-				vNode.IsPrimary = node.IsPrimary
-				vNode.State = node.State
-				vNode.Subcluster = node.Subcluster
-				vNode.Sandbox = node.Sandbox
+				vnode := buildVnodeFromNodeStateInfo(node)
 				if node.IsPrimary && node.State == util.NodeUpState {
 					op.vdb.PrimaryUpNodes = append(op.vdb.PrimaryUpNodes, node.Address)
+				} else if node.State == util.NodeComputeState {
+					op.vdb.ComputeNodes = append(op.vdb.ComputeNodes, node.Address)
 				}
-				err := op.vdb.addNode(&vNode)
+				err := op.vdb.addNode(&vnode)
 				if err != nil {
 					allErrs = errors.Join(allErrs, err)
 					return appendHTTPSFailureError(allErrs)
 				}
 				// extract catalog prefix from node's catalog path
-				// catalog prefix is preceding db name
-				dbPath := "/" + node.Database
-				index := strings.Index(node.CatalogPath, dbPath)
-				if index == -1 {
-					op.logger.PrintWarning("[%s] failed to get catalog prefix because catalog path %s does not contain database name %s",
-						op.name, node.CatalogPath, node.Database)
+				catalogPrefix, found := extractCatalogPrefix(node.CatalogPath, node.Database, node.Name)
+				if !found {
+					op.logger.PrintError("[%s] failed to retrieve catalog prefix because catalog path %q is malformed",
+						op.name, node.CatalogPath)
 				}
-				op.vdb.CatalogPrefix = node.CatalogPath[:index]
+				op.vdb.CatalogPrefix = catalogPrefix
 			}
 
 			return nil
@@ -174,4 +177,21 @@ func (op *httpsGetNodesInfoOp) processResult(_ *opEngineExecContext) error {
 
 func (op *httpsGetNodesInfoOp) finalize(_ *opEngineExecContext) error {
 	return nil
+}
+
+func buildVnodeFromNodeStateInfo(node *nodeStateInfo) VCoordinationNode {
+	vnode := makeVCoordinationNode()
+	vnode.Name = node.Name
+	vnode.Address = node.Address
+	vnode.CatalogPath = node.CatalogPath
+	vnode.DepotPath = node.DepotPath
+	vnode.StorageLocations = node.StorageLocations
+	vnode.IsPrimary = node.IsPrimary
+	vnode.State = node.State
+	vnode.Subcluster = node.Subcluster
+	vnode.Sandbox = node.Sandbox
+	vnode.IsControlNode = node.IsControlNode
+	vnode.ControlNode = node.ControlNode
+
+	return vnode
 }

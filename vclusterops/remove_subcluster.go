@@ -28,91 +28,119 @@ import (
 // database.
 type VRemoveScOptions struct {
 	DatabaseOptions
-	SubclusterToRemove string // subcluster to remove from database
-	ForceDelete        bool   // whether force delete directories
+	SCName      string // subcluster to remove from database
+	ForceDelete bool   // whether force delete directories
+	// The expected node names with their IPs in the subcluster, the user of vclusterOps needs
+	// to make sure the provided values are correct. This option will be used to do re-ip in
+	// the cluster that contains the subcluster.
+	NodeNameAddressMap map[string]string
+	// A primary up host in another subcluster that belongs to same cluster as the target subcluster.
+	// This option will be used to do re-ip in the cluster.
+	PrimaryUpHost string
+	// Names of the nodes that need to have active subscription. The user of vclusterOps needs
+	// to make sure the provided values are correct. This option will be used when some nodes
+	// cannot join the main cluster so we will only check the node subscription state for the nodes
+	// in this option. For example, after promote_sandbox, the nodes in old main cluster cannot
+	// join the new main cluster so we should only check the node subscription state on the nodes
+	// that are promoted from a sandbox.
+	NodesToPullSubs []string
 }
 
 func VRemoveScOptionsFactory() VRemoveScOptions {
-	opt := VRemoveScOptions{}
+	options := VRemoveScOptions{}
 	// set default values to the params
-	opt.setDefaultValues()
+	options.setDefaultValues()
 
-	return opt
+	options.ForceDelete = true
+
+	return options
 }
 
-func (o *VRemoveScOptions) setDefaultValues() {
-	o.DatabaseOptions.setDefaultValues()
+func (options *VRemoveScOptions) setDefaultValues() {
+	options.DatabaseOptions.setDefaultValues()
 }
 
-func (o *VRemoveScOptions) validateRequiredOptions(logger vlog.Printer) error {
-	err := o.validateBaseOptions("db_remove_subcluster", logger)
+func (options *VRemoveScOptions) validateRequiredOptions(logger vlog.Printer) error {
+	err := options.validateBaseOptions(RemoveSubclusterCmd, logger)
 	if err != nil {
 		return err
 	}
 
-	if o.SubclusterToRemove == "" {
+	if options.SCName == "" {
 		return fmt.Errorf("must specify a subcluster name")
+	}
+
+	err = util.ValidateScName(options.SCName)
+	if err != nil {
+		return err
 	}
 	return nil
 }
 
-func (o *VRemoveScOptions) validatePathOptions() error {
+func (options *VRemoveScOptions) validateEonOptions() error {
+	if !options.IsEon {
+		return fmt.Errorf(`cannot remove subcluster from an enterprise database '%s'`,
+			options.DBName)
+	}
+	return nil
+}
+
+func (options *VRemoveScOptions) validateExtraOptions() error {
 	// VER-88096 will get data path and depot path from /nodes
 	// so the validation below may be removed
 	// data prefix
-	err := util.ValidateRequiredAbsPath(o.DataPrefix, "data path")
+	err := util.ValidateRequiredAbsPath(options.DataPrefix, "data path")
 	if err != nil {
 		return err
 	}
 
 	// depot path
-	return util.ValidateRequiredAbsPath(o.DepotPrefix, "depot path")
+	return util.ValidateRequiredAbsPath(options.DepotPrefix, "depot path")
 }
 
-func (o *VRemoveScOptions) validateParseOptions(logger vlog.Printer) error {
-	err := o.validateRequiredOptions(logger)
+func (options *VRemoveScOptions) validateParseOptions(logger vlog.Printer) error {
+	// batch 1: validate required params
+	err := options.validateRequiredOptions(logger)
 	if err != nil {
 		return err
 	}
 
-	err = o.validateEonOptions()
+	// batch 2: validate eon params
+	err = options.validateEonOptions()
 	if err != nil {
 		return err
 	}
 
-	return o.validatePathOptions()
-}
-
-func (o *VRemoveScOptions) validateEonOptions() error {
-	if !o.IsEon {
-		return fmt.Errorf(`cannot remove subcluster from an enterprise database '%s'`,
-			o.DBName)
+	// batch 3: validate all other params
+	err = options.validateExtraOptions()
+	if err != nil {
+		return err
 	}
 	return nil
 }
 
-func (o *VRemoveScOptions) analyzeOptions() (err error) {
+func (options *VRemoveScOptions) analyzeOptions() (err error) {
 	// we analyze host names when it is set in user input, otherwise we use hosts in yaml config
-	if len(o.RawHosts) > 0 {
+	if len(options.RawHosts) > 0 {
 		// resolve RawHosts to be IP addresses
-		o.Hosts, err = util.ResolveRawHostsToAddresses(o.RawHosts, o.IPv6)
+		options.Hosts, err = util.ResolveRawHostsToAddresses(options.RawHosts, options.IPv6)
 		if err != nil {
 			return err
 		}
-		o.normalizePaths()
+		options.normalizePaths()
 	}
 	return nil
 }
 
-func (o *VRemoveScOptions) validateAnalyzeOptions(logger vlog.Printer) error {
-	if err := o.validateParseOptions(logger); err != nil {
+func (options *VRemoveScOptions) validateAnalyzeOptions(logger vlog.Printer) error {
+	if err := options.validateParseOptions(logger); err != nil {
 		return err
 	}
-	err := o.analyzeOptions()
+	err := options.analyzeOptions()
 	if err != nil {
 		return err
 	}
-	return o.setUsePassword(logger)
+	return options.setUsePasswordAndValidateUsernameIfNeeded(logger)
 }
 
 // VRemoveSubcluster removes a subcluster. It returns updated database catalog information and any error encountered.
@@ -129,20 +157,35 @@ func (vcc VClusterCommands) VRemoveSubcluster(removeScOpt *VRemoveScOptions) (VC
 		return vdb, err
 	}
 
+	// If the users provide extra node information, we will check and do re-ip for the nodes in
+	// the subcluster if necessary. This is to address the case where catalog has stale IPs of the
+	// nodes in the subcluster, which would cause a node removal failure at delete-directory step.
+	if removeScOpt.PrimaryUpHost != "" && len(removeScOpt.NodeNameAddressMap) > 0 {
+		e := vcc.reIP(&removeScOpt.DatabaseOptions,
+			removeScOpt.SCName,
+			removeScOpt.PrimaryUpHost,
+			removeScOpt.NodeNameAddressMap,
+			// we will do reload spread in remove_node so we don't need to do reload spread here
+			false /*reload spread*/)
+		if e != nil {
+			return vdb, e
+		}
+	}
+
 	// pre-check: should not remove the default subcluster
-	vcc.PrintInfo("Performing db_remove_subcluster pre-checks")
-	hostsToRemove, err := vcc.removeScPreCheck(&vdb, removeScOpt)
+	vcc.PrintInfo("Performing remove_subcluster pre-checks")
+	hostsToRemove, unboundNodesToRemove, err := vcc.removeScPreCheck(&vdb, removeScOpt)
 	if err != nil {
 		return vdb, err
 	}
 
-	// proceed to run db_remove_node only if
+	// proceed to run remove_node only if
 	// the number of nodes to remove is greater than zero
 	var needRemoveNodes bool
 	vcc.Log.V(1).Info("Nodes to be removed: %+v", hostsToRemove)
-	if len(hostsToRemove) == 0 {
+	if len(hostsToRemove) == 0 && len(unboundNodesToRemove) == 0 {
 		vcc.Log.PrintInfo("no node found in subcluster %s",
-			removeScOpt.SubclusterToRemove)
+			removeScOpt.SCName)
 		needRemoveNodes = false
 	} else {
 		needRemoveNodes = true
@@ -153,10 +196,18 @@ func (vcc VClusterCommands) VRemoveSubcluster(removeScOpt *VRemoveScOptions) (VC
 		removeNodeOpt := VRemoveNodeOptionsFactory()
 		removeNodeOpt.DatabaseOptions = removeScOpt.DatabaseOptions
 		removeNodeOpt.HostsToRemove = hostsToRemove
+		removeNodeOpt.UnboundNodesToRemove = unboundNodesToRemove
 		removeNodeOpt.ForceDelete = removeScOpt.ForceDelete
+		removeNodeOpt.IsSubcluster = true
+		removeNodeOpt.NodesToPullSubs = removeScOpt.NodesToPullSubs
 
 		vcc.Log.PrintInfo("Removing nodes %q from subcluster %s",
-			hostsToRemove, removeScOpt.SubclusterToRemove)
+			hostsToRemove, removeScOpt.SCName)
+		if len(unboundNodesToRemove) > 0 {
+			vcc.Log.PrintInfo("Removing unbound nodes %q from subcluster %s",
+				unboundNodesToRemove, removeScOpt.SCName)
+		}
+
 		vdb, err = vcc.VRemoveNode(&removeNodeOpt)
 		if err != nil {
 			return vdb, err
@@ -182,42 +233,43 @@ func (e *removeDefaultSubclusterError) Error() string {
 }
 
 // removeScPreCheck will build a list of instructions to perform
-// db_remove_subcluster pre-checks
+// remove_subcluster pre-checks
 //
 // The generated instructions will later perform the following operations necessary
 // for a successful remove_node:
 //   - Get cluster and nodes info (check if the target DB is Eon and get to-be-removed node list)
 //   - Get the subcluster info (check if the target sc exists and if it is the default sc)
-func (vcc VClusterCommands) removeScPreCheck(vdb *VCoordinationDatabase, options *VRemoveScOptions) ([]string, error) {
-	var hostsToRemove []string
-	const preCheckErrMsg = "while performing db_remove_subcluster pre-checks"
+func (vcc VClusterCommands) removeScPreCheck(
+	vdb *VCoordinationDatabase,
+	options *VRemoveScOptions) (hostsToRemove, unboundNodesToRemove []string, err error) {
+	const preCheckErrMsg = "while performing remove_subcluster pre-checks"
 
 	// get cluster and nodes info
-	err := vcc.getVDBFromRunningDB(vdb, &options.DatabaseOptions)
+	err = vcc.getVDBFromRunningDB(vdb, &options.DatabaseOptions)
 	if err != nil {
-		return hostsToRemove, err
+		return hostsToRemove, unboundNodesToRemove, err
 	}
 
-	// db_remove_subcluster only works with Eon database
+	// remove_subcluster only works with Eon database
 	if !vdb.IsEon {
 		// info from running db confirms that the db is not Eon
-		return hostsToRemove, fmt.Errorf(`cannot remove subcluster from an enterprise database '%s'`,
+		return hostsToRemove, unboundNodesToRemove, fmt.Errorf(`cannot remove subcluster from an enterprise database '%s'`,
 			options.DBName)
 	}
 
 	err = options.completeVDBSetting(vdb)
 	if err != nil {
-		return hostsToRemove, err
+		return hostsToRemove, unboundNodesToRemove, err
 	}
 
 	// get default subcluster
 	// cannot remove sandbox subcluster
 	httpsFindSubclusterOp, err := makeHTTPSFindSubclusterOp(options.Hosts,
 		options.usePassword, options.UserName, options.Password,
-		options.SubclusterToRemove,
+		options.SCName,
 		false /*do not ignore not found*/, RemoveSubclusterCmd)
 	if err != nil {
-		return hostsToRemove, fmt.Errorf("fail to get default subcluster %s, details: %w",
+		return hostsToRemove, unboundNodesToRemove, fmt.Errorf("fail to get default subcluster %s, details: %w",
 			preCheckErrMsg, err)
 	}
 
@@ -226,45 +278,48 @@ func (vcc VClusterCommands) removeScPreCheck(vdb *VCoordinationDatabase, options
 		&httpsFindSubclusterOp,
 	)
 
-	certs := httpsCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+	clusterOpEngine := makeClusterOpEngine(instructions, options)
 	err = clusterOpEngine.run(vcc.Log)
 	if err != nil {
 		// VER-88585 will improve this rfc error flow
 		if strings.Contains(err.Error(), "does not exist in the database") {
 			vcc.Log.PrintError("fail to get subclusters' information %s, %v", preCheckErrMsg, err)
 			rfcErr := rfc7807.New(rfc7807.SubclusterNotFound).WithHost(options.Hosts[0])
-			return hostsToRemove, rfcErr
+			return hostsToRemove, unboundNodesToRemove, rfcErr
 		}
-		return hostsToRemove, err
+		return hostsToRemove, unboundNodesToRemove, err
 	}
 
 	// the default subcluster should not be removed
-	if options.SubclusterToRemove == clusterOpEngine.execContext.defaultSCName {
-		return hostsToRemove, &removeDefaultSubclusterError{Name: options.SubclusterToRemove}
+	if options.SCName == clusterOpEngine.execContext.defaultSCName {
+		return hostsToRemove, unboundNodesToRemove, &removeDefaultSubclusterError{Name: options.SCName}
 	}
 
 	// get nodes of the to-be-removed subcluster
 	for h, vnode := range vdb.HostNodeMap {
-		if vnode.Subcluster == options.SubclusterToRemove {
+		if vnode.Subcluster == options.SCName {
 			hostsToRemove = append(hostsToRemove, h)
 		}
 	}
 
-	return hostsToRemove, nil
+	for _, vnode := range vdb.UnboundNodes {
+		unboundNodesToRemove = append(unboundNodesToRemove, vnode.Name)
+	}
+
+	return hostsToRemove, unboundNodesToRemove, nil
 }
 
 // completeVDBSetting sets some VCoordinationDatabase fields we cannot get yet
 // from the https endpoints. We set those fields from options.
-func (o *VRemoveScOptions) completeVDBSetting(vdb *VCoordinationDatabase) error {
-	vdb.DataPrefix = o.DataPrefix
-	vdb.DepotPrefix = o.DepotPrefix
+func (options *VRemoveScOptions) completeVDBSetting(vdb *VCoordinationDatabase) error {
+	vdb.DataPrefix = options.DataPrefix
+	vdb.DepotPrefix = options.DepotPrefix
 
 	hostNodeMap := makeVHostNodeMap()
 	// TODO: we set the depot path from /nodes rather than manually
 	// (VER-92725). This is useful for nmaDeleteDirectoriesOp.
 	for h, vnode := range vdb.HostNodeMap {
-		vnode.DepotPath = vdb.genDepotPath(vnode.Name)
+		vnode.DepotPath = vdb.GenDepotPath(vnode.Name)
 		hostNodeMap[h] = vnode
 	}
 	vdb.HostNodeMap = hostNodeMap
@@ -272,7 +327,7 @@ func (o *VRemoveScOptions) completeVDBSetting(vdb *VCoordinationDatabase) error 
 }
 
 func (vcc VClusterCommands) dropSubcluster(vdb *VCoordinationDatabase, options *VRemoveScOptions) error {
-	dropScErrMsg := fmt.Sprintf("fail to drop subcluster %s", options.SubclusterToRemove)
+	dropScErrMsg := fmt.Sprintf("fail to drop subcluster %s", options.SCName)
 
 	// the initiator is a list of one primary up host
 	// that will call the https /v1/subclusters/{scName}/drop endpoint
@@ -283,7 +338,7 @@ func (vcc VClusterCommands) dropSubcluster(vdb *VCoordinationDatabase, options *
 	}
 
 	httpsDropScOp, err := makeHTTPSDropSubclusterOp([]string{initiator},
-		options.SubclusterToRemove,
+		options.SCName,
 		options.usePassword, options.UserName, options.Password)
 	if err != nil {
 		vcc.Log.Error(err, "details: %v", dropScErrMsg)
@@ -293,8 +348,7 @@ func (vcc VClusterCommands) dropSubcluster(vdb *VCoordinationDatabase, options *
 	var instructions []clusterOp
 	instructions = append(instructions, &httpsDropScOp)
 
-	certs := httpsCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+	clusterOpEngine := makeClusterOpEngine(instructions, options)
 	err = clusterOpEngine.run(vcc.Log)
 	if err != nil {
 		vcc.Log.Error(err, "fail to drop subcluster, details: %v", dropScErrMsg)

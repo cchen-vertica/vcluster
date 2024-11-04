@@ -18,7 +18,6 @@ package vclusterops
 import (
 	"errors"
 	"fmt"
-	"strconv"
 
 	"github.com/vertica/vcluster/vclusterops/util"
 )
@@ -26,32 +25,13 @@ import (
 // Timeout set to 30 seconds for each GET /v1/nodes/{node} call.
 // 30 seconds is long enough for normal http request.
 // If this timeout is reached, it might imply that the target IP is unreachable
-const defaultHTTPRequestTimeoutSeconds = 30
-const (
-	StartDBCmd CmdType = iota
-	StartNodeCmd
-	CreateDBCmd
-)
-
-type CmdType int
-
-func (cmd CmdType) String() string {
-	switch cmd {
-	case StartDBCmd:
-		return "start_db"
-	case StartNodeCmd:
-		return "restart_node"
-	case CreateDBCmd:
-		return "create_db"
-	}
-	return "unknown_operation"
-}
+const defaultHTTPSRequestTimeoutSeconds = 30
 
 type httpsPollNodeStateOp struct {
 	opBase
 	opHTTPSBase
 	currentHost string
-	// The timeout for the entire operation
+	// The timeout for the entire operation (polling)
 	timeout int
 	// The timeout for each http request. Requests will be repeated if timeout hasn't been exceeded.
 	httpRequestTimeout int
@@ -67,7 +47,7 @@ func makeHTTPSPollNodeStateOpHelper(hosts []string,
 	op.description = fmt.Sprintf("Wait for %d node(s) to come up", len(hosts))
 	op.hosts = hosts
 	op.useHTTPPassword = useHTTPPassword
-	op.httpRequestTimeout = defaultHTTPRequestTimeoutSeconds
+	op.httpRequestTimeout = defaultHTTPSRequestTimeoutSeconds
 	op.checkDown = false // setting default to poll nodes UP
 	err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
 	if err != nil {
@@ -75,21 +55,9 @@ func makeHTTPSPollNodeStateOpHelper(hosts []string,
 	}
 	op.userName = userName
 	op.httpsPassword = httpsPassword
-
 	return op, nil
 }
 
-func makeHTTPSPollNodeStateOpWithTimeoutAndCommand(hosts []string,
-	useHTTPPassword bool, userName string, httpsPassword *string,
-	timeout int, cmdType CmdType) (httpsPollNodeStateOp, error) {
-	op, err := makeHTTPSPollNodeStateOpHelper(hosts, useHTTPPassword, userName, httpsPassword)
-	if err != nil {
-		return op, err
-	}
-	op.timeout = timeout
-	op.cmdType = cmdType
-	return op, nil
-}
 func makeHTTPSPollNodeStateDownOp(hosts []string,
 	useHTTPPassword bool, userName string,
 	httpsPassword *string) (httpsPollNodeStateOp, error) {
@@ -97,30 +65,27 @@ func makeHTTPSPollNodeStateDownOp(hosts []string,
 	if err != nil {
 		return op, err
 	}
-	timeoutSecondStr := util.GetEnv("NODE_STATE_POLLING_TIMEOUT", strconv.Itoa(StartupPollingTimeout))
-	timeoutSecond, err := strconv.Atoi(timeoutSecondStr)
-	if err != nil {
-		return httpsPollNodeStateOp{}, err
-	}
-	op.timeout = timeoutSecond
+	op.timeout = util.GetEnvInt("NODE_STATE_POLLING_TIMEOUT", StartupPollingTimeout)
 	op.checkDown = true
 	op.description = fmt.Sprintf("Wait for %d node(s) to go DOWN", len(hosts))
 	return op, nil
 }
+
 func makeHTTPSPollNodeStateOp(hosts []string,
 	useHTTPPassword bool, userName string,
-	httpsPassword *string) (httpsPollNodeStateOp, error) {
+	httpsPassword *string, timeout int) (httpsPollNodeStateOp, error) {
 	op, err := makeHTTPSPollNodeStateOpHelper(hosts, useHTTPPassword, userName, httpsPassword)
 	if err != nil {
 		return op, err
 	}
-	timeoutSecondStr := util.GetEnv("NODE_STATE_POLLING_TIMEOUT", strconv.Itoa(StartupPollingTimeout))
-	timeoutSecond, err := strconv.Atoi(timeoutSecondStr)
-	if err != nil {
-		return httpsPollNodeStateOp{}, err
+
+	if timeout == 0 {
+		// using default value
+		op.timeout = util.GetEnvInt("NODE_STATE_POLLING_TIMEOUT", StartupPollingTimeout)
+	} else {
+		op.timeout = timeout
 	}
-	op.timeout = timeoutSecond
-	return op, nil
+	return op, err
 }
 
 func (op *httpsPollNodeStateOp) getPollingTimeout() int {
@@ -132,7 +97,7 @@ func (op *httpsPollNodeStateOp) setupClusterHTTPRequest(hosts []string) error {
 		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = GetMethod
 		httpRequest.Timeout = op.httpRequestTimeout
-		httpRequest.buildHTTPSEndpoint("nodes/" + host)
+		httpRequest.buildHTTPSEndpoint(util.NodesEndpoint + host)
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -195,13 +160,11 @@ func (op *httpsPollNodeStateOp) shouldStopPolling() (bool, error) {
 		// If we find the wrong password for the HTTPS service on any hosts, we should fail immediately.
 		// We also need to let user know to wait until all nodes are up
 		if result.isPasswordAndCertificateError(op.logger) {
-			switch op.cmdType {
-			case StartDBCmd, StartNodeCmd:
+			if op.cmdType == StartDBCmd || op.cmdType == StartNodeCmd {
 				op.logger.PrintError("[%s] The credentials are incorrect. 'Catalog Sync' will not be executed.",
 					op.name)
-				return false, fmt.Errorf("[%s] wrong password/certificate for https service on host %s, but the nodes' startup have been in progress."+
-					"Please use vsql to check the nodes' status and manually run sync_catalog vsql command 'select sync_catalog()'", op.name, host)
-			case CreateDBCmd:
+				return false, makePollNodeStateAuthenticationError(op.name, host)
+			} else if op.cmdType == CreateDBCmd {
 				return true, fmt.Errorf("[%s] wrong password/certificate for https service on host %s",
 					op.name, host)
 			}
@@ -224,10 +187,8 @@ func (op *httpsPollNodeStateOp) shouldStopPolling() (bool, error) {
 					upNodeCount++
 				}
 			} else {
-				// if NMA endpoint cannot function well on any of the hosts, we do not want to retry polling
-				return true, fmt.Errorf("[%s] expect one node's information, but got %d nodes' information"+
-					" from NMA /v1/nodes/{node} endpoint on host %s",
-					op.name, len(nodesInformation.NodeList), host)
+				// if HTTPS endpoint cannot function well on any of the hosts, we do not want to retry polling
+				return true, fmt.Errorf(util.NodeInfoCountMismatch, op.name, len(nodesInformation.NodeList), host)
 			}
 		}
 	}
@@ -290,4 +251,9 @@ func (op *httpsPollNodeStateOp) shouldStopPollingForDown() (bool, error) {
 	op.updateSpinnerStopMessage("all nodes are down")
 
 	return true, nil
+}
+
+func makePollNodeStateAuthenticationError(opName, hostName string) error {
+	return fmt.Errorf("[%s] wrong password/certificate for https service on host %s, but the nodes' startup have been in progress. "+
+		"Please use vsql to check the nodes' status and manually run sync_catalog vsql command 'select sync_catalog()'", opName, hostName)
 }

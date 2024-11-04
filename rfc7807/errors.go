@@ -202,9 +202,54 @@ var (
 		"Target path does not exist",
 		http.StatusBadRequest,
 	)
-	CECatalogDirEmptyError = newProblemID(
-		path.Join(errorEndpointsPrefix, "catalog-dir-empty-error"),
+	InvalidCatalogPathError = newProblemID(
+		path.Join(errorEndpointsPrefix, "invalid-catalog-path"),
+		"Invalid catalog path",
+		http.StatusBadRequest,
+	)
+	CECatalogContentDirEmptyError = newProblemID(
+		path.Join(errorEndpointsPrefix, "catalog-content-dir-empty-error"),
 		"Target directory is empty",
+		http.StatusInternalServerError,
+	)
+	CECatalogContentDirNotExistError = newProblemID(
+		path.Join(errorEndpointsPrefix, "catalog-content-dir-not-exist-error"),
+		"Target directory does not exist",
+		http.StatusInternalServerError,
+	)
+	GenericStartNodeError = newProblemID(
+		path.Join(errorEndpointsPrefix, "start-node-command-failure-error"),
+		"Start node command execution failed",
+		http.StatusInternalServerError,
+	)
+	GenericOpenFileError = newProblemID(
+		path.Join(errorEndpointsPrefix, "open-file-failure-error"),
+		"Failed to open file",
+		http.StatusInternalServerError,
+	)
+	GenericReadFileError = newProblemID(
+		path.Join(errorEndpointsPrefix, "read-file-failure-error"),
+		"Failed to read file",
+		http.StatusInternalServerError,
+	)
+	GenericWriteFileError = newProblemID(
+		path.Join(errorEndpointsPrefix, "write-file-failure-error"),
+		"Failed to write file",
+		http.StatusInternalServerError,
+	)
+	GenericCreateFileError = newProblemID(
+		path.Join(errorEndpointsPrefix, "create-file-failure-error"),
+		"Failed to create file",
+		http.StatusInternalServerError,
+	)
+	MessageQueueFull = newProblemID(
+		path.Join(errorEndpointsPrefix, "message-queue-full"),
+		"Message queue is full",
+		http.StatusInternalServerError,
+	)
+	FetchDownDatabase = newProblemID(
+		path.Join(errorEndpointsPrefix, "fetch-down-database"),
+		"Fetch information from a down database",
 		http.StatusInternalServerError,
 	)
 )

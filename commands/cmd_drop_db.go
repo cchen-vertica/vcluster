@@ -40,45 +40,26 @@ func makeCmdDropDB() *cobra.Command {
 	cmd := makeBasicCobraCmd(
 		newCmd,
 		dropDBSubCmd,
-		"Drop a database",
-		`This subcommand drops a stopped database.
+		"Drops a database",
+		`Drops a stopped database. The effects this command has on your data differs slightly between database modes:
 
-For an Eon database, communal storage is not deleted. You can recover 
-the dropped database with revive_db.
+- Enterprise: Deletes the database data (including catalog, data, and depot directories) from all nodes.
+- Eon: Deletes non-communal storage data. Dropped Eon Mode databases can be revived.
 
-The config file must be specified to retrieve host information. If the config
-file path is not specified via --config, the default path will be used (refer
-to create_db subcommand for information about how the default config file path 
-is determined). When the command completes, the config file is removed.
-
-To remove the local directories like catalog, depot, and data, you can use the 
---force-delete option. The data deleted with this option is unrecoverable.
+The data deleted by this operation cannot be recovered.
 
 Examples:
   # Drop a database with config file
   vcluster drop_db --db-name test_db \
     --config /opt/vertica/config/vertica_cluster.yaml
 `,
-		[]string{dbNameFlag, configFlag, hostsFlag, catalogPathFlag, dataPathFlag, depotPathFlag},
+		[]string{dbNameFlag, configFlag, hostsFlag, ipv6Flag, catalogPathFlag, dataPathFlag, depotPathFlag},
 	)
-
-	// local flags
-	newCmd.setLocalFlags(cmd)
 
 	// hide flags since we expect it to come from config file, not from user input
 	hideLocalFlags(cmd, []string{hostsFlag, catalogPathFlag, dataPathFlag, depotPathFlag})
 
 	return cmd
-}
-
-// setLocalFlags will set the local flags the command has
-func (c *CmdDropDB) setLocalFlags(cmd *cobra.Command) {
-	cmd.Flags().BoolVar(
-		&c.dropDBOptions.ForceDelete,
-		"force-delete",
-		false,
-		"Delete local directories like catalog, depot, and data.",
-	)
 }
 
 func (c *CmdDropDB) Parse(inputArgv []string, logger vlog.Printer) error {
@@ -90,9 +71,11 @@ func (c *CmdDropDB) Parse(inputArgv []string, logger vlog.Printer) error {
 
 func (c *CmdDropDB) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()")
-	err := c.getCertFilesFromCertPaths(&c.dropDBOptions.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.dropDBOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 	return c.ValidateParseBaseOptions(&c.dropDBOptions.DatabaseOptions)
 }
@@ -102,17 +85,17 @@ func (c *CmdDropDB) Run(vcc vclusterops.ClusterCommands) error {
 
 	err := vcc.VDropDatabase(c.dropDBOptions)
 	if err != nil {
-		vcc.LogError(err, "failed do drop the database")
+		vcc.LogError(err, "failed to drop the database")
 		return err
 	}
 
-	vcc.PrintInfo("Successfully dropped database %s", c.dropDBOptions.DBName)
+	vcc.DisplayInfo("Successfully dropped database %s", c.dropDBOptions.DBName)
 	// if the database is successfully dropped, the config file will be removed
 	// if failed to remove it, we will ask users to manually do it
-	err = removeConfig(vcc.GetLog())
+	err = removeConfig()
 	if err != nil {
-		vcc.PrintWarning("Fail to remove config file %q, "+
-			"please manually do it. Details: %v", c.dropDBOptions.ConfigPath, err)
+		vcc.DisplayWarning("Failed to remove the configuration file %q, "+
+			"please remove it manually: %v", c.dropDBOptions.ConfigPath, err)
 	}
 	return nil
 }

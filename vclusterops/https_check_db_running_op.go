@@ -24,25 +24,31 @@ import (
 
 	"github.com/vertica/vcluster/rfc7807"
 	"github.com/vertica/vcluster/vclusterops/util"
+	"golang.org/x/exp/slices"
 )
 
 type opType int
 
 const (
 	CreateDB opType = iota
+	DropDB
 	StopDB
 	StartDB
 	ReviveDB
 	StopSC
+	ReIP
 
-	checkDBRunningOpName = "HTTPSCheckDBRunningOp"
-	checkDBRunningOpDesc = "Verify database is running"
+	checkDBRunningOpName    = "HTTPSCheckDBRunningOp"
+	checkDBRunningOpDesc    = "Verify database is running"
+	checkDBNotRunningOpDesc = "Verify database is not running"
 )
 
 func (op opType) String() string {
 	switch op {
 	case CreateDB:
 		return "Create DB"
+	case DropDB:
+		return "Drop DB"
 	case StopDB:
 		return "Stop DB"
 	case StartDB:
@@ -51,9 +57,13 @@ func (op opType) String() string {
 		return "Revive DB"
 	case StopSC:
 		return "Stop Subcluster"
+	case ReIP:
+		return "Re-ip Hosts"
 	}
 	return "unknown operation"
 }
+
+var maskEOFOp = []opType{DropDB}
 
 // DBIsRunningError is an error to indicate we found the database still running.
 // This is emitted from this op. Callers can do type checking to perform an
@@ -93,6 +103,9 @@ func makeHTTPSCheckRunningDBOp(hosts []string,
 	op.userName = userName
 	op.httpsPassword = httpsPassword
 	op.opType = operationType
+	if op.opType == StopDB {
+		op.description = checkDBNotRunningOpDesc
+	}
 	return op, nil
 }
 
@@ -105,21 +118,12 @@ func makeHTTPSCheckRunningDBWithSandboxOp(hosts []string,
 	useHTTPPassword bool, userName string, sandbox string, mainCluster bool,
 	httpsPassword *string, operationType opType,
 ) (httpsCheckRunningDBOp, error) {
-	op := httpsCheckRunningDBOp{}
-	op.name = checkDBRunningOpName
-	op.description = checkDBRunningOpDesc
-	op.hosts = hosts
-	op.useHTTPPassword = useHTTPPassword
-	op.sandbox = sandbox         // check if DB is running on specified sandbox
-	op.mainCluster = mainCluster // check if DB is running on the main cluster
-	err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
+	op, err := makeHTTPSCheckRunningDBOp(hosts, useHTTPPassword, userName, httpsPassword, operationType)
 	if err != nil {
 		return op, err
 	}
-
-	op.userName = userName
-	op.httpsPassword = httpsPassword
-	op.opType = operationType
+	op.sandbox = sandbox         // check if DB is running on specified sandbox
+	op.mainCluster = mainCluster // check if DB is running on the main cluster
 	return op, nil
 }
 
@@ -158,6 +162,24 @@ func (op *httpsCheckRunningDBOp) prepare(execContext *opEngineExecContext) error
 	execContext.dispatcher.setup(op.hosts)
 
 	return op.setupClusterHTTPRequest(op.hosts)
+}
+
+func (op *httpsCheckRunningDBOp) generateHintMessage(host, dbName string) (msg string) {
+	generalMsg := fmt.Sprintf("[%s] Detected HTTPS service running on host %s", op.name, host)
+	switch op.opType {
+	case CreateDB:
+		msg = fmt.Sprintf("%s, please stop the HTTPS service before creating a new database.", generalMsg)
+	case DropDB:
+		msg = fmt.Sprintf("%s, please stop the HTTPS service before dropping the existing database.", generalMsg)
+	case ReIP:
+		msg = fmt.Sprintf("%s, please consider using start_node to re-ip nodes for the running database.", generalMsg)
+	case StopDB, StartDB, ReviveDB, StopSC:
+		msg = fmt.Sprintf("%s.", generalMsg)
+	}
+	if dbName != "" {
+		msg += fmt.Sprintf(" Database %s is still running on host %s", dbName, host)
+	}
+	return msg
 }
 
 /*
@@ -209,37 +231,29 @@ func (op *httpsCheckRunningDBOp) isDBRunningOnHost(host string,
 	runningStatus := "running"
 	startingStatus := "starting/waiting to join cluster"
 	status = runningStatus
-	// check for rfc error
-	if !result.isSuccess() && !result.isPassing() {
-		// hanging HTTPS service thread
-		switch op.opType {
-		case CreateDB:
-			msg = fmt.Sprintf("[%s] Detected HTTPS service running on host %s, please stop the HTTPS service before creating a new database",
+	runningDBName := ""
+	// If request to /nodes is successful, get the dbname for a detailed message
+	if result.isSuccess() {
+		nodeList := nodesState.NodeList
+		if len(nodeList) == 0 {
+			// exception, throw an error
+			noNodeErr := fmt.Errorf("[%s] Unexpected result from host %s: empty node_list obtained from /nodes endpoint response",
 				op.name, host)
-		case StopDB, StartDB, ReviveDB, StopSC:
-			msg = fmt.Sprintf("[%s] Detected HTTPS service running on host %s", op.name, host)
+			return status, "", noNodeErr
 		}
+		nodeInfo := nodeList[0]
+		runningDBName = nodeInfo.Database
+	} else {
 		// check whether the node is starting and hasn't pulled the latest catalog yet
+		// setting status for logging purpose
 		rfcError := &rfc7807.VProblem{}
 		if ok := errors.As(result.err, &rfcError); ok &&
 			rfcError.ProblemID == rfc7807.AuthenticationError &&
 			strings.Contains(rfcError.Detail, "Local node has not joined cluster yet") {
 			status = startingStatus
 		}
-		return status, msg, nil
 	}
-	nodeList := nodesState.NodeList
-	if len(nodeList) == 0 {
-		// exception, throw an error
-		noNodeErr := fmt.Errorf("[%s] Unexpected result from host %s: empty node_list obtained from /nodes endpoint response",
-			op.name, host)
-		return status, "", noNodeErr
-	}
-
-	nodeInfo := nodeList[0]
-	runningDBName := nodeInfo.Database
-
-	msg = fmt.Sprintf("[%s] Database %s is still running on host %s", op.name, runningDBName, host)
+	msg = op.generateHintMessage(host, runningDBName)
 	return status, msg, nil
 }
 
@@ -280,13 +294,18 @@ func (op *httpsCheckRunningDBOp) processResult(_ *opEngineExecContext) error {
 	for host, result := range op.clusterHTTPRequest.ResultCollection {
 		op.logResponse(host, result)
 
+		// EOF is expected in node shutdown: we expect the node's HTTPS service to go down quickly
+		// and the Server HTTPS service does not guarantee that the response being sent back to the client before it closes
+		if result.isEOF() && slices.Contains(maskEOFOp, op.opType) {
+			continue
+		}
 		if !result.isPassing() {
 			allErrs = errors.Join(allErrs, result.err)
 		}
 		if result.isFailing() && !result.isHTTPRunning() {
 			downHosts[host] = true
 			continue
-		} else if result.isException() {
+		} else if result.isException() || result.isEOF() {
 			exceptionHosts[host] = true
 			continue
 		}
@@ -336,6 +355,10 @@ func (op *httpsCheckRunningDBOp) handleDBRunning(allErrs error, msg string, upHo
 		const createDBMsg = "aborting database creation"
 		op.logger.PrintInfo(createDBMsg)
 		op.updateSpinnerMessage(createDBMsg)
+	case DropDB:
+		const dropDBMsg = "aborting database drop"
+		op.logger.PrintInfo(dropDBMsg)
+		op.updateSpinnerMessage(dropDBMsg)
 	case StopDB:
 		const stopDBMsg = "the database is not down yet"
 		op.logger.PrintInfo(stopDBMsg)
@@ -352,6 +375,10 @@ func (op *httpsCheckRunningDBOp) handleDBRunning(allErrs error, msg string, upHo
 		const reviveDBMsg = "aborting database revival"
 		op.logger.PrintInfo(reviveDBMsg)
 		op.updateSpinnerMessage(reviveDBMsg)
+	case ReIP:
+		const reIPMsg = "aborting re-ip hosts"
+		op.logger.PrintInfo(reIPMsg)
+		op.updateSpinnerMessage(reIPMsg)
 	}
 
 	// when db is running, append an error to allErrs for stopping VClusterOpEngine
@@ -401,7 +428,7 @@ func (op *httpsCheckRunningDBOp) checkProcessedResult(sandboxedHosts map[string]
 func (op *httpsCheckRunningDBOp) execute(execContext *opEngineExecContext) error {
 	op.logger.Info("Execute() called", "opType", op.opType)
 	switch op.opType {
-	case CreateDB, StartDB, ReviveDB:
+	case CreateDB, StartDB, ReviveDB, ReIP, DropDB:
 		return op.checkDBConnection(execContext)
 	case StopDB, StopSC:
 		return op.pollForDBDown(execContext)

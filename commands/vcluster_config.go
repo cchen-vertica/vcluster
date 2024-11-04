@@ -19,12 +19,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/vertica/vcluster/vclusterops"
 	"github.com/vertica/vcluster/vclusterops/util"
-	"github.com/vertica/vcluster/vclusterops/vlog"
 	"gopkg.in/yaml.v3"
 )
 
@@ -34,8 +35,8 @@ const (
 	// default file name that we'll use.
 	defConfigFileName        = "vertica_cluster.yaml"
 	currentConfigFileVersion = "1.0"
-	configBackupName         = "vertica_cluster.yaml.backup"
-	configFilePerm           = 0600
+	configFilePerm           = 0644
+	rpmConfDir               = "/opt/vertica/config"
 )
 
 // Config is the struct of vertica_cluster.yaml
@@ -51,6 +52,7 @@ type DatabaseConfig struct {
 	IsEon                   bool          `yaml:"eonMode" mapstructure:"eonMode"`
 	CommunalStorageLocation string        `yaml:"communalStorageLocation" mapstructure:"communalStorageLocation"`
 	Ipv6                    bool          `yaml:"ipv6" mapstructure:"ipv6"`
+	FirstStartAfterRevive   bool          `yaml:"firstStartAfterRevive" mapstructure:"firstStartAfterRevive"`
 }
 
 // NodeConfig contains node information in the database
@@ -61,6 +63,7 @@ type NodeConfig struct {
 	CatalogPath string `yaml:"catalogPath" mapstructure:"catalogPath"`
 	DataPath    string `yaml:"dataPath" mapstructure:"dataPath"`
 	DepotPath   string `yaml:"depotPath" mapstructure:"depotPath"`
+	Sandbox     string `yaml:"sandbox" mapstructure:"sandbox"` // Name of the sandbox the node belongs to
 }
 
 // MakeDatabaseConfig() can create an instance of DatabaseConfig
@@ -114,7 +117,6 @@ func initConfigImpl(vclusterExePath string, ensureOptVerticaConfigExists, ensure
 	// have installed the vertica package on this machine and so can assume
 	// /opt/vertica/config exists too.
 	if vclusterExePath == defaultExecutablePath {
-		const rpmConfDir = "/opt/vertica/config"
 		_, err := os.Stat(rpmConfDir)
 		if ensureOptVerticaConfigExists && err != nil {
 			if os.IsNotExist(err) {
@@ -188,25 +190,24 @@ func loadConfigToViper() error {
 
 // writeConfig can write database information to vertica_cluster.yaml.
 // It will be called in the end of some subcommands that will change the db state.
-func writeConfig(vdb *vclusterops.VCoordinationDatabase, logger vlog.Printer) error {
+func writeConfig(vdb *vclusterops.VCoordinationDatabase, forceOverwrite bool) error {
 	if dbOptions.ConfigPath == "" {
 		return fmt.Errorf("configuration file path is empty")
 	}
 
+	return WriteConfigToPath(vdb, dbOptions.ConfigPath, forceOverwrite)
+}
+
+func WriteConfigToPath(vdb *vclusterops.VCoordinationDatabase,
+	configPath string,
+	forceOverwrite bool) error {
 	dbConfig, err := readVDBToDBConfig(vdb)
 	if err != nil {
 		return err
 	}
 
-	// if the config file exists already,
-	// create its backup before overwriting it
-	err = backupConfigFile(dbOptions.ConfigPath, logger)
-	if err != nil {
-		return err
-	}
-
 	// update db config with the given database info
-	err = dbConfig.write(dbOptions.ConfigPath)
+	err = dbConfig.write(configPath, forceOverwrite)
 	if err != nil {
 		return err
 	}
@@ -216,14 +217,9 @@ func writeConfig(vdb *vclusterops.VCoordinationDatabase, logger vlog.Printer) er
 
 // removeConfig remove the config file vertica_cluster.yaml.
 // It will be called in the end of drop_db subcommands.
-func removeConfig(logger vlog.Printer) error {
+func removeConfig() error {
 	if dbOptions.ConfigPath == "" {
 		return fmt.Errorf("configuration file path is empty")
-	}
-	// back up the old config file
-	err := backupConfigFile(dbOptions.ConfigPath, logger)
-	if err != nil {
-		return err
 	}
 
 	// remove the old db config
@@ -239,54 +235,91 @@ func readVDBToDBConfig(vdb *vclusterops.VCoordinationDatabase) (DatabaseConfig, 
 		if !ok {
 			return dbConfig, fmt.Errorf("cannot find host %s from HostNodeMap", host)
 		}
-		nodeConfig := NodeConfig{}
-		nodeConfig.Name = vnode.Name
-		nodeConfig.Address = vnode.Address
-		nodeConfig.Subcluster = vnode.Subcluster
 
-		// VER-91869 will replace the path prefixes with full paths
-		if vdb.CatalogPrefix == "" {
-			nodeConfig.CatalogPath = util.GetPathPrefix(vnode.CatalogPath)
-		} else {
-			nodeConfig.CatalogPath = vdb.CatalogPrefix
-		}
-		if vdb.DataPrefix == "" && len(vnode.StorageLocations) > 0 {
-			nodeConfig.DataPath = util.GetPathPrefix(vnode.StorageLocations[0])
-		} else {
-			nodeConfig.DataPath = vdb.DataPrefix
-		}
-		if vdb.IsEon && vdb.DepotPrefix == "" {
-			nodeConfig.DepotPath = util.GetPathPrefix(vnode.DepotPath)
-		} else {
-			nodeConfig.DepotPath = vdb.DepotPrefix
-		}
-
+		nodeConfig := BuildNodeConfig(vnode, vdb)
 		dbConfig.Nodes = append(dbConfig.Nodes, &nodeConfig)
 	}
+
 	dbConfig.IsEon = vdb.IsEon
 	dbConfig.CommunalStorageLocation = vdb.CommunalStorageLocation
 	dbConfig.Ipv6 = vdb.Ipv6
 	dbConfig.Name = vdb.Name
+	dbConfig.FirstStartAfterRevive = vdb.FirstStartAfterRevive
 
 	return dbConfig, nil
 }
 
-// backupConfigFile backs up config file before we update it.
-// This function will add ".backup" suffix to previous config file.
-func backupConfigFile(configFilePath string, logger vlog.Printer) error {
-	if util.CanReadAccessDir(configFilePath) == nil {
-		// copy file to vertica_cluster.yaml.backup
-		configDirPath := filepath.Dir(configFilePath)
-		configFileBackup := filepath.Join(configDirPath, configBackupName)
-		logger.Info("Configuration file exists and, creating a backup", "config file", configFilePath,
-			"backup file", configFileBackup)
-		err := util.CopyFile(configFilePath, configFileBackup, configFilePerm)
-		if err != nil {
-			return err
-		}
+func BuildNodeConfig(vnode *vclusterops.VCoordinationNode,
+	vdb *vclusterops.VCoordinationDatabase) NodeConfig {
+	nodeConfig := NodeConfig{}
+	nodeConfig.Name = vnode.Name
+	nodeConfig.Address = vnode.Address
+	nodeConfig.Subcluster = vnode.Subcluster
+	nodeConfig.Sandbox = vnode.Sandbox
+
+	if vdb.CatalogPrefix == "" {
+		nodeConfig.CatalogPath = vnode.CatalogPath
+	} else {
+		nodeConfig.CatalogPath = vdb.GenCatalogPath(vnode.Name)
+	}
+	if vdb.DataPrefix == "" && len(vnode.StorageLocations) > 0 {
+		nodeConfig.DataPath = vnode.StorageLocations[0]
+	} else {
+		nodeConfig.DataPath = vdb.GenDataPath(vnode.Name)
+	}
+	if vdb.IsEon && vdb.DepotPrefix == "" {
+		nodeConfig.DepotPath = vnode.DepotPath
+	} else if vdb.DepotPrefix != "" {
+		nodeConfig.DepotPath = vdb.GenDepotPath(vnode.Name)
 	}
 
-	return nil
+	return nodeConfig
+}
+
+// Update give node info based on give vnode info
+func updateNodeConfig(vnode *vclusterops.VCoordinationNode,
+	vdb *vclusterops.VCoordinationDatabase, n *NodeConfig) {
+	n.Address = vnode.Address
+	n.Subcluster = vnode.Subcluster
+	n.Sandbox = vnode.Sandbox
+	if n.CatalogPath == "" {
+		if strings.HasSuffix(vnode.CatalogPath, "/Catalog") {
+			// Remove the "/Catalog" suffix and assign the remaining path to catalogPath
+			n.CatalogPath = strings.TrimSuffix(vnode.CatalogPath, "/Catalog")
+		} else {
+			n.CatalogPath = vnode.CatalogPath
+		}
+	}
+	if vdb.DataPrefix == "" && len(vnode.StorageLocations) > 0 && n.DataPath == "" {
+		n.DataPath = vnode.StorageLocations[0]
+	}
+	n.DepotPath = vnode.DepotPath
+}
+
+// update the input dbConfig
+func UpdateDBConfig(vdb *vclusterops.VCoordinationDatabase, dbConfig *DatabaseConfig, sandbox string, mainClusterOnly bool) {
+	var newNodes []*NodeConfig
+	nodeConfigMap := make(map[string]*NodeConfig)
+	for _, n := range dbConfig.Nodes {
+		nodeConfigMap[n.Name] = n
+	}
+
+	for _, vnode := range vdb.HostNodeMap {
+		if sandbox == vnode.Sandbox || (mainClusterOnly && vnode.Sandbox == util.MainClusterSandbox) {
+			if n, exists := nodeConfigMap[vnode.Name]; exists {
+				// If found, update the existing node configuration
+				updateNodeConfig(vnode, vdb, n)
+			} else {
+				// If not found, build and append a new node configuration
+				n := BuildNodeConfig(vnode, vdb)
+				newNodes = append(newNodes, &n)
+			}
+		}
+	}
+	dbConfig.Nodes = append(dbConfig.Nodes, newNodes...)
+	sort.Slice(dbConfig.Nodes, func(i, j int) bool {
+		return dbConfig.Nodes[i].Name < dbConfig.Nodes[j].Name
+	})
 }
 
 // read reads information from configFilePath to a DatabaseConfig object.
@@ -315,7 +348,10 @@ func readConfig() (dbConfig *DatabaseConfig, err error) {
 // any write error encountered. The viper in-built write function cannot
 // work well(the order of keys cannot be customized) so we used yaml.Marshal()
 // and os.WriteFile() to write the config file.
-func (c *DatabaseConfig) write(configFilePath string) error {
+func (c *DatabaseConfig) write(configFilePath string, forceOverwrite bool) error {
+	if util.CheckPathExist(configFilePath) && !forceOverwrite {
+		return fmt.Errorf("file %s exist, consider using --force-overwrite-file to overwrite the file", configFilePath)
+	}
 	var config Config
 	config.Version = currentConfigFileVersion
 	config.Database = *c
@@ -330,6 +366,11 @@ func (c *DatabaseConfig) write(configFilePath string) error {
 	}
 
 	return nil
+}
+
+// Exposing the write function for external packages
+func (c *DatabaseConfig) Write(configFilePath string, forceOverwrite bool) error {
+	return c.write(configFilePath, forceOverwrite)
 }
 
 // getHosts returns host addresses of all nodes in database
@@ -350,5 +391,5 @@ func (c *DatabaseConfig) getPathPrefixes() (catalogPrefix string,
 		return "", "", ""
 	}
 
-	return c.Nodes[0].CatalogPath, c.Nodes[0].DataPath, c.Nodes[0].DepotPath
+	return util.GetPathPrefix(c.Nodes[0].CatalogPath), util.GetPathPrefix(c.Nodes[0].DataPath), util.GetPathPrefix(c.Nodes[0].DepotPath)
 }

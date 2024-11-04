@@ -17,6 +17,7 @@ package util
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -27,6 +28,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,6 +47,29 @@ type FetchAllEnvVars interface {
 }
 
 const (
+	RootDir               = "/"
+	NodeInfoCountMismatch = "[%s] expect one node's information, but got %d nodes' information from HTTPS /v1/nodes/<host> endpoint on host %s"
+	DepotSizeHint         = "integer%, which expresses the depot size as a percentage of the total disk size."
+	DepotSizeKMGTMsg      = "integer{K|M|G|T}, where K is kilobytes, M is megabytes, G is gigabytes, and T is terabytes.\n"
+	DepotFmtMsg           = "Size of depot in one of the following formats:\n"
+	TimeToWaitToClose     = "The time to wait, in seconds, for user connections to close on their own.\n"
+	TimeExpire            = "When the time expires, user connections are automatically closed and the database is hut down.\n"
+	InfiniteWaitTime      = "If the value is negative, VCluster waits indefinitely until all user connections close."
+	CloseAllConns         = "If set to 0, VCluster closes all user connections immediately.\n"
+	Default               = "Default: "
+	FailToWriteToConfig   = "Failed to write the configuration file: "
+	CallCommand           = "Calling method Run() for command "
+	DBInfo                = "because we cannot retrieve the correct database information"
+	CommStorageLoc        = "communal storage location is not specified"
+	CommStorageFail       = "failed to retrieve the communal storage location"
+	SubclustersEndpoint   = "subclusters/"
+	ShutDownEndpoint      = "/shutdown"
+	NodesEndpoint         = "nodes/"
+	DropEndpoint          = "/drop"
+	ArchiveEndpoint       = "archives"
+)
+
+const (
 	keyValueArrayLen = 2
 	ipv4Str          = "IPv4"
 	ipv6Str          = "IPv6"
@@ -59,6 +84,19 @@ const (
 	nmaRootCAPathEnvVar = "NMA_ROOTCA_PATH"
 	nmaCertPathEnvVar   = "NMA_CERT_PATH"
 	nmaKeyPathEnvVar    = "NMA_KEY_PATH"
+
+	objectNameUnsupportedCharacters = `=<>'^\".@?#&/:;{}()[] \~!%+|,` + "`$"
+)
+
+const (
+	// Unbound nodes are the nodes in catalog but without IP assigned.
+	// These nodes can come from the following scenario:
+	// - a database has primary and secondary nodes
+	// - users run revive_db to the primary nodes only
+	// - the secondary nodes become "unbound nodes" after this revive
+	// - users need to run start_node with re-ip to bring the unbound nodes up
+	UnboundedIPv4 = "0.0.0.0"
+	UnboundedIPv6 = "0:0:0:0:0:0:0:0"
 )
 
 // NmaSecretLookup retrieves kubernetes secrets.
@@ -94,6 +132,13 @@ func GetJSONLogErrors(responseContent string, responseObj any, opName string, lo
 
 func CheckNotEmpty(a string) bool {
 	return a != ""
+}
+
+func BoolToStr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 func CheckAllEmptyOrNonEmpty(vars ...string) bool {
@@ -215,18 +260,21 @@ func ResolveToAbsPath(path string) (string, error) {
 		return homeDir, nil
 	} else if strings.HasPrefix(path, "~/") {
 		return filepath.Join(homeDir, path[2:]), nil
-	} else {
-		return "", fmt.Errorf("invalid path")
 	}
+	return "", fmt.Errorf("invalid path")
 }
 
 // IP util functions
 func IsIPv4(ip string) bool {
-	return net.ParseIP(ip).To4() != nil
+	// To4() may not return nil even if the given address is ipv6
+	// we need to double check whether the ip string contains `:`
+	return !strings.Contains(ip, ":") && net.ParseIP(ip).To4() != nil
 }
 
 func IsIPv6(ip string) bool {
-	return net.ParseIP(ip).To16() != nil
+	// To16() may not return nil even if the given address is ipv4
+	// we need to double check whether the ip string contains `:`
+	return strings.Contains(ip, ":") && net.ParseIP(ip).To16() != nil
 }
 
 func AddressCheck(address string, ipv6 bool) error {
@@ -243,6 +291,10 @@ func AddressCheck(address string, ipv6 bool) error {
 			ipVersion = ipv6Str
 		}
 		return fmt.Errorf("%s in the re-ip file is not a valid %s address", address, ipVersion)
+	}
+
+	if address == UnboundedIPv4 || address == UnboundedIPv6 {
+		return errors.New("the re-ip list should not contain unbound addresses")
 	}
 
 	return nil
@@ -283,14 +335,26 @@ func ResolveToOneIP(hostname string, ipv6 bool) (string, error) {
 	if ipv6 && IsIPv6(hostname) {
 		return hostname, nil
 	}
+
+	// resolve host name to address
 	addrs, err := ResolveToIPAddrs(hostname, ipv6)
 	// contains the case where the hostname cannot be resolved to be IP
 	if err != nil {
 		return "", err
 	}
+
+	ipVersion := ipv4Str
+	if ipv6 {
+		ipVersion = ipv6Str
+	}
+	if len(addrs) == 0 {
+		return "", fmt.Errorf("cannot resolve %s as %s address", hostname, ipVersion)
+	}
+
 	if len(addrs) > 1 {
 		return "", fmt.Errorf("%s is resolved to more than one IP addresss: %v", hostname, addrs)
 	}
+
 	return addrs[0], nil
 }
 
@@ -301,6 +365,9 @@ func ResolveRawHostsToAddresses(rawHosts []string, ipv6 bool) ([]string, error) 
 	for _, host := range rawHosts {
 		if host == "" {
 			return hostAddresses, fmt.Errorf("invalid empty host found in the provided host list")
+		}
+		if host == UnboundedIPv4 || host == UnboundedIPv6 {
+			return hostAddresses, fmt.Errorf("ambiguous host address (%s) is used", host)
 		}
 		addr, err := ResolveToOneIP(host, ipv6)
 		if err != nil {
@@ -352,6 +419,17 @@ func ParseHostList(hosts *[]string) error {
 func GetEnv(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
 		return value
+	}
+	return fallback
+}
+
+// get int value of env var with a fallback value
+func GetEnvInt(key string, fallback int) int {
+	if value, ok := os.LookupEnv(key); ok {
+		if intValue, err := strconv.Atoi(value); err == nil {
+			return intValue
+		}
+		// failed to retrieve env value, should use fallback value
 	}
 	return fallback
 }
@@ -442,8 +520,11 @@ func IsOptionSet(f *flag.FlagSet, optionName string) bool {
 
 // ValidateName will validate the name of an obj, the obj can be database, subcluster, etc.
 // when a name is provided, make sure no special chars are in it
-func ValidateName(name, obj string) error {
-	escapeChars := `=<>'^\".@*?#&/-:;{}()[] \~!%+|,` + "`$"
+func ValidateName(name, obj string, allowDash bool) error {
+	escapeChars := objectNameUnsupportedCharacters + "*"
+	if !allowDash {
+		escapeChars += "-"
+	}
 	for _, c := range name {
 		if strings.Contains(escapeChars, string(c)) {
 			return fmt.Errorf("invalid character in %s name: %c", obj, c)
@@ -452,8 +533,56 @@ func ValidateName(name, obj string) error {
 	return nil
 }
 
+// ValidateQualifiedObjectNamePattern will validate the pattern of [.namespace].schema.table, separated by ","
+// Return nil when its valid, else will panic
+func ValidateQualifiedObjectNamePattern(pattern string, allowAsterisk bool) error {
+	const maxPatternLen = 128
+
+	// Build a regex that matches any unsupported characters
+	disallowedChars := objectNameUnsupportedCharacters
+	if !allowAsterisk {
+		disallowedChars += "*"
+	}
+	disallowedCharsRegex := regexp.QuoteMeta(disallowedChars)
+
+	// Validates [.namespace].schema.table format and disallows any special characters
+	// Ref: https://docs.vertica.com/24.1.x/en/sql-reference/language-elements/identifiers/
+	qualifiedObjectNameRegex := fmt.Sprintf(`^(\.[^%s]+\.)?([^%s]+\.)?[^%s]+$`,
+		disallowedCharsRegex, disallowedCharsRegex, disallowedCharsRegex)
+	r := regexp.MustCompile(qualifiedObjectNameRegex)
+
+	objects := strings.Split(pattern, ",")
+	for _, obj := range objects {
+		// start with v_ is invalid
+		if strings.HasPrefix(obj, "v_") {
+			return fmt.Errorf("invalid character in pattern %s: %s", pattern, obj)
+		}
+		// len > 128 is invalid
+		if len([]rune(obj)) > maxPatternLen {
+			return fmt.Errorf("pattern is too long %s: %s", pattern, obj)
+		}
+		match := r.MatchString(obj)
+		if !match {
+			return fmt.Errorf("invalid pattern %s: %s", pattern, obj)
+		}
+	}
+	return nil
+}
+
 func ValidateDBName(dbName string) error {
-	return ValidateName(dbName, "database")
+	return ValidateName(dbName, "database", false)
+}
+
+func ValidateScName(dbName string) error {
+	return ValidateName(dbName, "subcluster", true)
+}
+
+func ValidateSandboxName(dbName string) error {
+	return ValidateName(dbName, "sandbox", true)
+}
+
+func ValidateArchiveName(archive string) error {
+	return ValidateName(archive, "archive", true)
 }
 
 // suppress help message for hidden options
@@ -564,6 +693,9 @@ func Max[T constraints.Ordered](a, b T) T {
 
 // GetPathPrefix returns a path prefix for a (catalog/data/depot) path of a node
 func GetPathPrefix(path string) string {
+	if path == "" {
+		return path
+	}
 	return filepath.Dir(filepath.Dir(path))
 }
 
@@ -623,4 +755,20 @@ func FillInDefaultTimeForEndTimestamp(dateonly *string) *time.Time {
 
 func IsTimeEqualOrAfter(start, end time.Time) bool {
 	return end.Equal(start) || end.After(start)
+}
+
+const EmptyConfigParamErrMsg = "configuration parameter must not be empty"
+
+func IsK8sEnvironment() bool {
+	port, portSet := os.LookupEnv(kubernetesPort)
+	return portSet && port != ""
+}
+
+// GetClusterName can return the correct cluster name based on the sandbox name.
+// It can help people to log the cluster name.
+func GetClusterName(sandbox string) string {
+	if sandbox == MainClusterSandbox {
+		return "main cluster"
+	}
+	return "sandbox " + sandbox
 }

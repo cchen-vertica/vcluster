@@ -40,6 +40,9 @@ type nmaVerticaVersionOp struct {
 	sandbox            bool
 	scName             string
 	readOnly           bool
+	targetNodeIPs      []string // used to filter desired nodes' info
+	unreachableHosts   []string // hosts that are not reachable through NMA
+	skipUnreachable    bool     // whether we skip unreachable host in the subcluster
 }
 
 func makeHostVersionMap() hostVersionMap {
@@ -75,10 +78,15 @@ func makeNMAReadVerticaVersionOp(vdb *VCoordinationDatabase) nmaVerticaVersionOp
 	return op
 }
 
-// makeNMAVerticaVersionOpWithoutHosts is used when db is down
-func makeNMAVerticaVersionOpWithoutHosts(sameVersion bool) nmaVerticaVersionOp {
+// makeNMAVerticaVersionOpWithTargetHosts is used in start_db, VCluster will check Vertica
+// version for the subclusters which contain target hosts, ignoring unreachable hosts
+func makeNMAVerticaVersionOpWithTargetHosts(sameVersion bool, unreachableHosts, targetNodeIPs []string) nmaVerticaVersionOp {
 	// We set hosts to nil and isEon to false temporarily, and they will get the correct value from execute context in prepare()
-	return makeNMACheckVerticaVersionOp(nil /*hosts*/, sameVersion, false /*isEon*/)
+	op := makeNMACheckVerticaVersionOp(nil /*hosts*/, sameVersion, false /*isEon*/)
+	op.targetNodeIPs = targetNodeIPs
+	op.unreachableHosts = unreachableHosts
+	op.skipUnreachable = true
+	return op
 }
 
 // makeNMAVerticaVersionOpAfterUnsandbox is used after unsandboxing
@@ -94,6 +102,18 @@ func makeNMAVerticaVersionOpAfterUnsandbox(sameVersion bool, scName string) nmaV
 func makeNMAVerticaVersionOpWithVDB(sameVersion bool, vdb *VCoordinationDatabase) nmaVerticaVersionOp {
 	// We set hosts to nil temporarily, and it will get the correct value from vdb in prepare()
 	op := makeNMACheckVerticaVersionOp(nil /*hosts*/, sameVersion, vdb.IsEon)
+	op.vdb = vdb
+	return op
+}
+
+// makeNMAVerticaVersionOpBeforeStartNode is used in start_node, VCluster will check Vertica
+// version for the nodes which are in the same cluster(main cluster or sandbox) as the target hosts
+func makeNMAVerticaVersionOpBeforeStartNode(vdb *VCoordinationDatabase, unreachableHosts, targetNodeIPs []string,
+	skipUnreachable bool) nmaVerticaVersionOp {
+	op := makeNMACheckVerticaVersionOp(nil, true /*sameVersion*/, vdb.IsEon)
+	op.unreachableHosts = unreachableHosts
+	op.targetNodeIPs = targetNodeIPs
+	op.skipUnreachable = skipUnreachable
 	op.vdb = vdb
 	return op
 }
@@ -156,48 +176,19 @@ func (op *nmaVerticaVersionOp) prepare(execContext *opEngineExecContext) error {
 	} else if len(op.hosts) == 0 {
 		if op.vdb != nil {
 			// db is up
-			op.HasIncomingSCNames = true
-			for host, vnode := range op.vdb.HostNodeMap {
-				op.hosts = append(op.hosts, host)
-				sc := vnode.Subcluster
-				// Update subcluster of new nodes that will be assigned to default subcluster.
-				// When we created vdb in db_add_node without specifying subcluster, we did not know the default subcluster name
-				// so new nodes is using "" as their subclusters. Below line will correct node nodes' subclusters.
-				if op.vdb.IsEon && sc == "" && execContext.defaultSCName != "" {
-					op.vdb.HostNodeMap[host].Subcluster = execContext.defaultSCName
-					sc = execContext.defaultSCName
-				}
-
-				// initialize the SCToHostVersionMap with empty versions
-				if op.SCToHostVersionMap[sc] == nil {
-					op.SCToHostVersionMap[sc] = makeHostVersionMap()
-				}
-				op.SCToHostVersionMap[sc][host] = ""
+			err := op.buildHostVersionMapWithVDB(execContext)
+			if err != nil {
+				return err
 			}
 		} else {
-			// db is down
-			op.HasIncomingSCNames = true
-			if execContext.nmaVDatabase.CommunalStorageLocation != "" {
-				op.IsEon = true
-			}
-			for host, vnode := range execContext.nmaVDatabase.HostNodeMap {
-				op.hosts = append(op.hosts, host)
-				// initialize the SCToHostVersionMap with empty versions
-				sc := vnode.Subcluster.Name
-				if op.SCToHostVersionMap[sc] == nil {
-					op.SCToHostVersionMap[sc] = makeHostVersionMap()
-				}
-				op.SCToHostVersionMap[sc][host] = ""
+			// start db
+			err := op.buildHostVersionMapWhenDBDown(execContext)
+			if err != nil {
+				return err
 			}
 		}
 	} else {
-		// When creating a db, the subclusters of all nodes will be the same so set it to a fixed value.
-		sc := DefaultSC
-		// initialize the SCToHostVersionMap with empty versions
-		op.SCToHostVersionMap[sc] = makeHostVersionMap()
-		for _, host := range op.hosts {
-			op.SCToHostVersionMap[sc][host] = ""
-		}
+		op.buildHostVersionMapDefault()
 	}
 
 	execContext.dispatcher.setup(op.hosts)
@@ -341,5 +332,154 @@ func (op *nmaVerticaVersionOp) readVersion() error {
 		vnode.Version = versionInfo[len(versionInfo)-1]
 	}
 
+	return nil
+}
+
+// prepareHostNodeMap is a helper to make a host-node map for nodes in target subclusters
+func (op *nmaVerticaVersionOp) prepareHostNodeMap(execContext *opEngineExecContext) (map[string]*nmaVNode, error) {
+	hostNodeMap := execContext.nmaVDatabase.HostNodeMap
+	if len(op.targetNodeIPs) > 0 {
+		hostSCMap := make(map[string]string)
+		scHostsMap := make(map[string][]string)
+		for host, vnode := range execContext.nmaVDatabase.HostNodeMap {
+			hostSCMap[host] = vnode.Subcluster.Name
+			scHostsMap[vnode.Subcluster.Name] = append(scHostsMap[vnode.Subcluster.Name], host)
+		}
+		allHostsInTargetSCs, err := op.findHostsInTargetSubclusters(hostSCMap, scHostsMap)
+		if err != nil {
+			return hostNodeMap, err
+		}
+		// get host-node map for all hosts in target subclusters
+		hostNodeMap = util.FilterMapByKey(execContext.nmaVDatabase.HostNodeMap, allHostsInTargetSCs)
+	}
+	return hostNodeMap, nil
+}
+
+// prepareHostNodeMapWithVDB is a helper to make a host-node map for all nodes in the
+// subclusters of target nodes
+func (op *nmaVerticaVersionOp) prepareHostNodeMapWithVDB() (vHostNodeMap, error) {
+	if len(op.targetNodeIPs) == 0 {
+		return op.vdb.HostNodeMap, nil
+	}
+	hostNodeMap := makeVHostNodeMap()
+	hostSCMap := make(map[string]string)
+	scHostsMap := make(map[string][]string)
+	for host, vnode := range op.vdb.HostNodeMap {
+		hostSCMap[host] = vnode.Subcluster
+		scHostsMap[vnode.Subcluster] = append(scHostsMap[vnode.Subcluster], host)
+	}
+	allHostsInTargetSCs, err := op.findHostsInTargetSubclusters(hostSCMap, scHostsMap)
+	if err != nil {
+		return hostNodeMap, err
+	}
+	// get host-node map for all hosts in target subclusters
+	hostNodeMap = util.FilterMapByKey(op.vdb.HostNodeMap, allHostsInTargetSCs)
+
+	return hostNodeMap, nil
+}
+
+// findHostsInTargetSubclusters is a helper function to get all hosts in the subclusters of
+// target nodes. The parameters of this function are two maps:
+// 1. host-subcluster map for the entire database
+// 2. subcluster-hosts map for the entire database
+func (op *nmaVerticaVersionOp) findHostsInTargetSubclusters(hostSCMap map[string]string,
+	scHostsMap map[string][]string) ([]string, error) {
+	allHostsInTargetSCs := []string{}
+	// find subclusters that hold the target hosts
+	targetSCs := []string{}
+	for _, host := range op.targetNodeIPs {
+		sc, ok := hostSCMap[host]
+		if ok {
+			targetSCs = append(targetSCs, sc)
+		} else {
+			return allHostsInTargetSCs, fmt.Errorf("[%s] host %s does not exist in the database", op.name, host)
+		}
+	}
+	// find all hosts that in target subclusters
+	for _, sc := range targetSCs {
+		hosts, ok := scHostsMap[sc]
+		if ok {
+			// current sc contains unreachablehosts
+			if len(util.SliceCommon(hosts, op.unreachableHosts)) > 0 {
+				hasUpNodes := false
+				if !op.skipUnreachable {
+					for _, host := range hosts {
+						if op.vdb.hostIsUp(host) {
+							hasUpNodes = true
+							break
+						}
+					}
+				}
+				// remove unreachable hosts
+				hosts = util.SliceDiff(hosts, op.unreachableHosts)
+				// all nodes in the existing subcluster are unreachable
+				if hasUpNodes && len(util.SliceDiff(hosts, op.targetNodeIPs)) == 0 {
+					return allHostsInTargetSCs, fmt.Errorf("[%s] all existing nodes in subcluster %s are not reachable", op.name, sc)
+				}
+			}
+			allHostsInTargetSCs = append(allHostsInTargetSCs, hosts...)
+		} else {
+			return allHostsInTargetSCs, fmt.Errorf("[%s] internal error: subcluster %s was lost when preparing the hosts", op.name, sc)
+		}
+	}
+	return allHostsInTargetSCs, nil
+}
+
+func (op *nmaVerticaVersionOp) buildHostVersionMapDefault() {
+	// When creating a db, the subclusters of all nodes will be the same so set it to a fixed value.
+	sc := DefaultSC
+	// initialize the SCToHostVersionMap with empty versions
+	op.SCToHostVersionMap[sc] = makeHostVersionMap()
+	for _, host := range op.hosts {
+		op.SCToHostVersionMap[sc][host] = ""
+	}
+}
+
+// buildHostVersionMapWhenDBDown sets an hostVersionMap for start_db
+func (op *nmaVerticaVersionOp) buildHostVersionMapWhenDBDown(execContext *opEngineExecContext) error {
+	op.HasIncomingSCNames = true
+	if execContext.nmaVDatabase.CommunalStorageLocation != "" {
+		op.IsEon = true
+	}
+	hostNodeMap, err := op.prepareHostNodeMap(execContext)
+	if err != nil {
+		return err
+	}
+	for host, vnode := range hostNodeMap {
+		op.hosts = append(op.hosts, host)
+		// initialize the SCToHostVersionMap with empty versions
+		sc := vnode.Subcluster.Name
+		if op.SCToHostVersionMap[sc] == nil {
+			op.SCToHostVersionMap[sc] = makeHostVersionMap()
+		}
+		op.SCToHostVersionMap[sc][host] = ""
+	}
+	return nil
+}
+
+// buildHostVersionMapWithVDB sets an hostVersionMap from a vdb
+func (op *nmaVerticaVersionOp) buildHostVersionMapWithVDB(execContext *opEngineExecContext) error {
+	op.HasIncomingSCNames = true
+	hostNodeMap, err := op.prepareHostNodeMapWithVDB()
+	if err != nil {
+		return err
+	}
+	for host, vnode := range hostNodeMap {
+		op.hosts = append(op.hosts, host)
+		sc := vnode.Subcluster
+		// Update subcluster of new nodes that will be assigned to default subcluster.
+		// When we created vdb in add_node without specifying subcluster, we did not know the default subcluster name
+		// so new nodes is using "" as their subclusters. Below line will correct node nodes' subclusters.
+		if op.vdb.IsEon && sc == "" && execContext.defaultSCName != "" {
+			op.vdb.HostNodeMap[host].Subcluster = execContext.defaultSCName
+			sc = execContext.defaultSCName
+		}
+
+		// initialize the SCToHostVersionMap with empty versions
+		if op.SCToHostVersionMap[sc] == nil {
+			op.SCToHostVersionMap[sc] = makeHostVersionMap()
+		}
+		op.SCToHostVersionMap[sc][host] = ""
+	}
 	return nil
 }

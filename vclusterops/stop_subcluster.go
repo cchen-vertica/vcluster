@@ -33,11 +33,11 @@ type VStopSubclusterOptions struct {
 }
 
 func VStopSubclusterOptionsFactory() VStopSubclusterOptions {
-	opt := VStopSubclusterOptions{}
+	options := VStopSubclusterOptions{}
 	// set default values to the params
-	opt.setDefaultValues()
+	options.setDefaultValues()
 
-	return opt
+	return options
 }
 
 func (options *VStopSubclusterOptions) setDefaultValues() {
@@ -46,11 +46,19 @@ func (options *VStopSubclusterOptions) setDefaultValues() {
 }
 
 func (options *VStopSubclusterOptions) validateRequiredOptions(log vlog.Printer) error {
-	err := options.validateBaseOptions(commandStopCluster, log)
+	err := options.validateBaseOptions(StopSubclusterCmd, log)
 	if err != nil {
 		return err
 	}
 
+	if options.SCName == "" {
+		return fmt.Errorf("must specify a subcluster name")
+	}
+
+	err = util.ValidateScName(options.SCName)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -129,8 +137,7 @@ func (vcc VClusterCommands) VStopSubcluster(options *VStopSubclusterOptions) err
 	}
 
 	// Create a VClusterOpEngine, and add certs to the engine
-	certs := httpsCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+	clusterOpEngine := makeClusterOpEngine(instructions, options)
 
 	// Give the instructions to the VClusterOpEngine to run
 	runError := clusterOpEngine.run(vcc.Log)
@@ -163,6 +170,12 @@ func (vcc *VClusterCommands) produceStopSCInstructions(options *VStopSubclusterO
 		}
 	}
 
+	httpsGetSubclusterInfoOp, err := makeHTTPSGetSubclusterInfoOp(usePassword, options.UserName, options.Password,
+		options.SCName, StopSubclusterCmd)
+	if err != nil {
+		return instructions, err
+	}
+
 	httpsGetUpNodesOp, err := makeHTTPSGetUpScNodesOp(options.DBName, options.Hosts,
 		usePassword, options.UserName, options.Password, StopSubclusterCmd, options.SCName)
 	if err != nil {
@@ -187,6 +200,7 @@ func (vcc *VClusterCommands) produceStopSCInstructions(options *VStopSubclusterO
 
 	instructions = append(instructions,
 		&httpsGetUpNodesOp,
+		&httpsGetSubclusterInfoOp,
 		&httpsSyncCatalogOp,
 		&httpsStopSCOp,
 		&httpsCheckDBRunningOp,

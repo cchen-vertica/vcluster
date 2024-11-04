@@ -47,31 +47,22 @@ func makeCmdAddNode() *cobra.Command {
 	cmd := makeBasicCobraCmd(
 		newCmd,
 		addNodeSubCmd,
-		"Add host(s) to an existing database",
-		`This subcommand adds one or more hosts to an existing database.
-
-You need to provide the --add option followed by one or more hosts to add as a
-comma-separated list.
-
-You cannot add hosts to a sandbox subcluster in an Eon Mode database.
-
-The --node-names option is utilized to address issues resulting from a failed
-node addition attempt. It's crucial to include all expected nodes in the catalog
-when using this option. This subcommand removes any surplus nodes from the
-catalog, provided they are down, before commencing the node addition process.
-Omitting the option will skip this node trimming process.
+		"Adds host(s) to a database",
+		`Adds one or more user-specified hosts as nodes to an existing database. You cannot add nodes to a sandboxed subcluster.
 
 Examples:
   # Add a single host to the existing database with config file
-  vcluster db_add_node --db-name test_db --new-hosts 10.20.30.43 \
-    --config /opt/vertica/config/vertica_cluster.yaml
+  vcluster add_node --db-name test_db --new-hosts 10.20.30.43 \
+    --config /opt/vertica/config/vertica_cluster.yaml \
+    --password "PASSWORD"
 
   # Add multiple hosts to the existing database with user input
-  vcluster db_add_node --db-name test_db --new-hosts 10.20.30.43,10.20.30.44 \
+  vcluster add_node --db-name test_db --new-hosts 10.20.30.43,10.20.30.44 \
     --data-path /data --hosts 10.20.30.40 \
-    --node-names v_test_db_node0001,v_test_db_node0002
+    --node-names v_test_db_node0001,v_test_db_node0002 \
+    --password "PASSWORD"
 `,
-		[]string{dbNameFlag, configFlag, hostsFlag, dataPathFlag, depotPathFlag,
+		[]string{dbNameFlag, configFlag, hostsFlag, ipv6Flag, dataPathFlag, depotPathFlag,
 			passwordFlag},
 	)
 
@@ -79,7 +70,7 @@ Examples:
 	newCmd.setLocalFlags(cmd)
 
 	// require hosts to add
-	markFlagsRequired(cmd, []string{addNodeFlag})
+	markFlagsRequired(cmd, addNodeFlag)
 
 	return cmd
 }
@@ -90,38 +81,51 @@ func (c *CmdAddNode) setLocalFlags(cmd *cobra.Command) {
 		&c.addNodeOptions.NewHosts,
 		addNodeFlag,
 		[]string{},
-		"Comma-separated list of host(s) to add to the database",
+		"A comma-separated list of hosts to add to the database.",
 	)
 	cmd.Flags().BoolVar(
 		&c.addNodeOptions.ForceRemoval,
 		"force-removal",
 		false,
-		"Whether to force clean-up of existing directories before adding host(s)",
+		"Whether to delete any existing database directories in the new hosts before attempting to add them.",
 	)
 	cmd.Flags().BoolVar(
 		c.addNodeOptions.SkipRebalanceShards,
 		"skip-rebalance-shards",
 		false,
-		util.GetEonFlagMsg("Skip the subcluster shards rebalancing"),
+		util.GetEonFlagMsg("Whether to skip shard rebalancing."),
 	)
 	cmd.Flags().StringVar(
 		&c.addNodeOptions.SCName,
 		subclusterFlag,
 		"",
-		util.GetEonFlagMsg("The Name of subcluster"+
-			" to which the host(s) must be added. If empty default subcluster is considered"),
+		util.GetEonFlagMsg("The name of the subcluster to which the host(s) should be added."+
+			"This string must conform to the format used for database names."),
 	)
 	cmd.Flags().StringVar(
 		&c.addNodeOptions.DepotSize,
 		"depot-size",
 		"",
-		util.GetEonFlagMsg("Size of depot"),
+		util.GetEonFlagMsg(util.DepotFmtMsg+util.DepotSizeKMGTMsg+util.DepotSizeHint),
 	)
 	cmd.Flags().StringVar(
 		&c.nodeNameListStr,
 		"node-names",
 		"",
-		"Comma-separated list of node names that exist in the cluster",
+		"[Use only with support guidance] A comma-separated list of node names that exist in the cluster.",
+	)
+	cmd.Flags().StringVar(
+		&c.addNodeOptions.ComputeGroup,
+		"compute-group",
+		"",
+		util.GetEonFlagMsg("The new or existing compute group for the new nodes. "+
+			"If specified, the new nodes will be compute-only nodes."),
+	)
+	cmd.Flags().IntVar(
+		&c.addNodeOptions.TimeOut,
+		"add-node-timeout",
+		util.GetEnvInt("NODE_STATE_POLLING_TIMEOUT", util.DefaultTimeoutSeconds),
+		"The time, in seconds, to wait for the specified nodes to be added.",
 	)
 }
 
@@ -139,12 +143,7 @@ func (c *CmdAddNode) Parse(inputArgv []string, logger vlog.Printer) error {
 func (c *CmdAddNode) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()")
 
-	err := c.getCertFilesFromCertPaths(&c.addNodeOptions.DatabaseOptions)
-	if err != nil {
-		return err
-	}
-
-	err = c.parseNewHostList()
+	err := c.parseNewHostList()
 	if err != nil {
 		return err
 	}
@@ -158,6 +157,14 @@ func (c *CmdAddNode) validateParse(logger vlog.Printer) error {
 	if err != nil {
 		return err
 	}
+
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.addNodeOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
+	}
+
 	return c.setDBPassword(&c.addNodeOptions.DatabaseOptions)
 }
 
@@ -168,7 +175,7 @@ func (c *CmdAddNode) parseNewHostList() error {
 		if err != nil {
 			// the err from util.ParseHostList will be "must specify a host or host list"
 			// we overwrite the error here to provide more details
-			return fmt.Errorf("must specify at least one host to add")
+			return fmt.Errorf("you must specify at least one host")
 		}
 	}
 	return nil
@@ -179,7 +186,7 @@ func (c *CmdAddNode) parseNodeNameList() error {
 	if c.parser.Changed("node-names") {
 		if c.nodeNameListStr == "" {
 			return fmt.Errorf("when --node-names is specified, "+
-				"must provide all existing node names in %q", c.addNodeOptions.DBName)
+				"you must provide all existing nodes in %q", c.addNodeOptions.DBName)
 		}
 
 		c.addNodeOptions.ExpectedNodeNames = strings.Split(c.nodeNameListStr, ",")
@@ -193,18 +200,19 @@ func (c *CmdAddNode) Run(vcc vclusterops.ClusterCommands) error {
 
 	options := c.addNodeOptions
 
-	vdb, addNodeError := vcc.VAddNode(options)
-	if addNodeError != nil {
-		return addNodeError
+	vdb, err := vcc.VAddNode(options)
+	if err != nil {
+		vcc.LogError(err, "failed to add node")
+		return err
 	}
 
 	// write db info to vcluster config file
-	err := writeConfig(&vdb, vcc.GetLog())
+	err = writeConfig(&vdb, true /*forceOverwrite*/)
 	if err != nil {
-		vcc.PrintWarning("fail to write config file, details: %s", err)
+		vcc.DisplayWarning("Failed to write config file: %s", err)
 	}
 
-	vcc.PrintInfo("Added nodes %v to database %s", c.addNodeOptions.NewHosts, options.DBName)
+	vcc.DisplayInfo("Successfully added nodes %v to database %s", c.addNodeOptions.NewHosts, options.DBName)
 	return nil
 }
 
