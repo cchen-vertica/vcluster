@@ -31,10 +31,16 @@ import (
 const defaultLogPath = "/opt/vertica/log/vcluster.log"
 const defaultExecutablePath = "/opt/vertica/bin/vcluster"
 
-const CLIVersion = "1.2.0"
-const vclusterLogPathEnv = "VCLUSTER_LOG_PATH"
-const vclusterKeyFileEnv = "VCLUSTER_KEY_FILE"
-const vclusterCertFileEnv = "VCLUSTER_CERT_FILE"
+const CLIVersion = "2.0.0"
+
+// environment variables
+const (
+	vclusterLogPathEnv    = "VCLUSTER_LOG_PATH"
+	vclusterKeyFileEnv    = "VCLUSTER_KEY_FILE"
+	vclusterCertFileEnv   = "VCLUSTER_CERT_FILE"
+	vclusterCACertFileEnv = "VCLUSTER_CA_CERT_FILE"
+	vclusterTLSModeEnv    = "VCLUSTER_TLS_MODE"
+)
 
 // *Flag is for the flag name, *Key is for viper key name
 // They are bound together
@@ -53,18 +59,26 @@ const (
 	dataPathKey                 = "dataPath"
 	communalStorageLocationFlag = "communal-storage-location"
 	communalStorageLocationKey  = "communalStorageLocation"
+	archiveNameFlag             = "archive-name"
+	archiveNameKey              = "archiveName"
 	ipv6Flag                    = "ipv6"
 	ipv6Key                     = "ipv6"
 	eonModeFlag                 = "eon-mode"
 	eonModeKey                  = "eonMode"
 	configParamFlag             = "config-param"
 	configParamKey              = "configParam"
+	configParamFileFlag         = "config-param-file"
+	configParamFileKey          = "configParamFile"
 	logPathFlag                 = "log-path"
 	logPathKey                  = "logPath"
 	keyFileFlag                 = "key-file"
 	keyFileKey                  = "keyFile"
 	certFileFlag                = "cert-file"
 	certFileKey                 = "certFile"
+	caCertFileFlag              = "ca-cert-file"
+	caCertFileKey               = "caCertFile"
+	tlsModeFlag                 = "tls-mode"
+	tlsModeKey                  = "tlsMode"
 	passwordFlag                = "password"
 	passwordKey                 = "password"
 	passwordFileFlag            = "password-file"
@@ -80,10 +94,19 @@ const (
 	subclusterFlag              = "subcluster"
 	addNodeFlag                 = "new-hosts"
 	sandboxFlag                 = "sandbox"
+	saveRpFlag                  = "save-restore-point"
+	isolateMetadataFlag         = "isolate-metadata"
+	createStorageLocationsFlag  = "create-storage-locations"
+	forUpgradeFlag              = "for-upgrade"
 	sandboxKey                  = "sandbox"
 	connFlag                    = "conn"
 	connKey                     = "conn"
 	stopNodeFlag                = "stop-hosts"
+	reIPFileFlag                = "re-ip-file"
+	removeNodeFlag              = "remove"
+	removeUnboundNodesFlag      = "remove-unbound-nodes"
+	startNodeFlag               = "start"
+	startHostFlag               = "start-hosts"
 )
 
 // Flag and key for database replication
@@ -98,8 +121,30 @@ const (
 	targetPasswordFileKey  = "targetPasswordFile"
 	targetConnFlag         = "target-conn"
 	targetConnKey          = "targetConn"
+	targetKeyFileFlag      = "target-key-file"
+	targetKeyFileKey       = "targetKeyFile"
+	targetCertFileFlag     = "target-cert-file"
+	targetCertFileKey      = "targetCertFile"
+	targetCaCertFileFlag   = "target-ca-cert-file"
+	targetCaCertFileKey    = "targetCaCertFile"
+	targetTLSModeFlag      = "target-tls-mode"
+	targetTLSModeKey       = "targetTLSMode"
+	targetIPv6Flag         = "target-ipv6"
+	targetIPv6Key          = "targetIPv6"
+	asyncFlag              = "async"
+	asyncKey               = "async"
 	sourceTLSConfigFlag    = "source-tlsconfig"
 	sourceTLSConfigKey     = "sourceTLSConfig"
+	tableOrSchemaNameFlag  = "table-or-schema-name"
+	tableOrSchemaNameKey   = "tableOrSchemaName"
+	includePatternFlag     = "include-pattern"
+	includePatternKey      = "includePattern"
+	excludePatternFlag     = "exclude-pattern"
+	excludePatternKey      = "excludePattern"
+	targetNamespaceFlag    = "target-namespace"
+	targetNamespaceKey     = "targetNamespace"
+	transactionIDFlag      = "transaction-id"
+	transactionIDKey       = "transactionID"
 )
 
 // flags to viper key map
@@ -117,6 +162,8 @@ var flagKeyMap = map[string]string{
 	logPathFlag:                 logPathKey,
 	keyFileFlag:                 keyFileKey,
 	certFileFlag:                certFileKey,
+	caCertFileFlag:              caCertFileKey,
+	tlsModeFlag:                 tlsModeKey,
 	passwordFlag:                passwordKey,
 	passwordFileFlag:            passwordFileKey,
 	readPasswordFromPromptFlag:  readPasswordFromPromptKey,
@@ -124,11 +171,23 @@ var flagKeyMap = map[string]string{
 	verboseFlag:                 verboseKey,
 	outputFileFlag:              outputFileKey,
 	sandboxFlag:                 sandboxKey,
+	archiveNameFlag:             archiveNameKey,
 	targetDBNameFlag:            targetDBNameKey,
 	targetHostsFlag:             targetHostsKey,
 	targetUserNameFlag:          targetUserNameKey,
 	targetPasswordFileFlag:      targetPasswordFileKey,
+	targetKeyFileFlag:           targetKeyFileKey,
+	targetCertFileFlag:          targetCertFileKey,
+	targetCaCertFileFlag:        targetCaCertFileKey,
+	targetTLSModeFlag:           targetTLSModeKey,
+	targetIPv6Flag:              targetIPv6Key,
+	asyncFlag:                   asyncKey,
 	sourceTLSConfigFlag:         sourceTLSConfigKey,
+	tableOrSchemaNameFlag:       tableOrSchemaNameKey,
+	includePatternFlag:          includePatternKey,
+	excludePatternFlag:          excludePatternKey,
+	targetNamespaceFlag:         targetNamespaceKey,
+	transactionIDFlag:           transactionIDKey,
 }
 
 // target database flags to viper key map
@@ -137,6 +196,20 @@ var targetFlagKeyMap = map[string]string{
 	targetHostsFlag:        targetHostsKey,
 	targetUserNameFlag:     targetUserNameKey,
 	targetPasswordFileFlag: targetPasswordFileKey,
+	targetKeyFileFlag:      targetKeyFileKey,
+	targetCertFileFlag:     targetCertFileKey,
+	targetCaCertFileFlag:   targetCaCertFileKey,
+	targetTLSModeFlag:      targetTLSModeKey,
+	targetIPv6Flag:         targetIPv6Key,
+}
+
+// map of viper keys to environment variables
+var keyEnvVarMap = map[string]string{
+	logPathKey:    vclusterLogPathEnv,
+	keyFileKey:    vclusterKeyFileEnv,
+	certFileKey:   vclusterCertFileEnv,
+	caCertFileKey: vclusterCACertFileEnv,
+	tlsModeKey:    vclusterTLSModeEnv,
 }
 
 const (
@@ -149,31 +222,40 @@ const (
 	configShowSubCmd        = "show"
 	replicationSubCmd       = "replication"
 	startReplicationSubCmd  = "start"
-	listAllNodesSubCmd      = "list_allnodes"
+	replicationStatusSubCmd = "status"
+	listAllNodesSubCmd      = "list_all_nodes"
 	startDBSubCmd           = "start_db"
 	dropDBSubCmd            = "drop_db"
-	addSCSubCmd             = "db_add_subcluster"
-	removeSCSubCmd          = "db_remove_subcluster"
+	addSCSubCmd             = "add_subcluster"
+	removeSCSubCmd          = "remove_subcluster"
 	stopSCSubCmd            = "stop_subcluster"
-	addNodeSubCmd           = "db_add_node"
+	addNodeSubCmd           = "add_node"
+	startSCSubCmd           = "start_subcluster"
 	stopNodeCmd             = "stop_node"
-	removeNodeSubCmd        = "db_remove_node"
-	restartNodeSubCmd       = "restart_node"
+	removeNodeSubCmd        = "remove_node"
+	startNodeSubCmd         = "start_node"
 	reIPSubCmd              = "re_ip"
 	sandboxSubCmd           = "sandbox_subcluster"
 	unsandboxSubCmd         = "unsandbox_subcluster"
 	scrutinizeSubCmd        = "scrutinize"
 	showRestorePointsSubCmd = "show_restore_points"
 	installPkgSubCmd        = "install_packages"
+	// hidden Cmds (for internal testing only)
+	promoteSandboxSubCmd    = "promote_sandbox"
+	createArchiveCmd        = "create_archive"
+	saveRestorePointsSubCmd = "save_restore_point"
+	getDrainingStatusSubCmd = "get_draining_status"
 )
 
 // cmdGlobals holds global variables shared by multiple
 // commands
 type cmdGlobals struct {
-	verbose  bool
-	file     *os.File
-	keyFile  string
-	certFile string
+	verbose    bool
+	file       *os.File
+	keyFile    string
+	certFile   string
+	caCertFile string
+	tlsMode    string
 
 	// Global variables for targetDB are used for the replication subcommand
 	targetHosts        []string
@@ -181,6 +263,11 @@ type cmdGlobals struct {
 	targetDB           string
 	targetUserName     string
 	connFile           string
+	targetKeyFile      string
+	targetCertFile     string
+	targetCaCertFile   string
+	targetTLSMode      string
+	targetIPv6         bool
 }
 
 var (
@@ -189,13 +276,13 @@ var (
 	rootCmd   = &cobra.Command{
 		Use:   "vcluster",
 		Short: "Administer a Vertica cluster",
-		Long: `This CLI is used to manage a Vertica cluster with a REST API. The REST API endpoints are
-exposed by the following services:
+		Long: `The vcluster CLI manages a Vertica cluster with a REST API. The REST API
+endpoints are exposed by the following services:
 - Node Management Agent (NMA)
 - Embedded HTTPS service
 
-This CLI tool combines REST calls to provide an interface so that you can
-perform the following administrator operations:
+vcluster combines REST calls to provide an interface so that you can perform
+the following administrator operations:
 - Create a database
 - Scale a cluster up and down
 - Restart a database
@@ -204,7 +291,7 @@ perform the following administrator operations:
 - Revive an Eon database
 - Add/Remove a subcluster
 - Sandbox/Unsandbox a subcluster
-- Scrutinize a database
+- Run scrutinize on a database
 - View the state of a database
 - Install packages on a database`,
 		Version: CLIVersion,
@@ -249,6 +336,8 @@ func initVcc(cmd *cobra.Command) vclusterops.VClusterCommands {
 }
 
 // setDBOptionsUsingViper can set the value of flag using the relevant key in viper
+//
+//nolint:gocyclo
 func setDBOptionsUsingViper(flag string) error {
 	switch flag {
 	case dbNameFlag:
@@ -275,6 +364,10 @@ func setDBOptionsUsingViper(flag string) error {
 		globals.keyFile = viper.GetString(keyFileKey)
 	case certFileFlag:
 		globals.certFile = viper.GetString(certFileKey)
+	case caCertFileFlag:
+		globals.caCertFile = viper.GetString(caCertFileKey)
+	case tlsModeFlag:
+		globals.tlsMode = viper.GetString(tlsModeKey)
 	case verboseFlag:
 		globals.verbose = viper.GetBool(verboseKey)
 	default:
@@ -296,6 +389,18 @@ func setTargetDBOptionsUsingViper(flag string) error {
 		globals.targetUserName = viper.GetString(targetUserNameKey)
 	case targetPasswordFileFlag:
 		globals.targetPasswordFile = viper.GetString(targetPasswordFileKey)
+	case targetKeyFileFlag:
+		globals.targetKeyFile = viper.GetString(targetKeyFileKey)
+	case targetCertFileFlag:
+		globals.targetCertFile = viper.GetString(targetCertFileKey)
+	case targetCaCertFileFlag:
+		globals.targetCaCertFile = viper.GetString(targetCaCertFileKey)
+	case targetTLSModeFlag:
+		globals.targetTLSMode = viper.GetString(targetTLSModeKey)
+	case targetIPv6Flag:
+		globals.targetIPv6 = viper.GetBool(targetIPv6Key)
+	case verboseFlag:
+		globals.verbose = viper.GetBool(verboseKey)
 	default:
 		return fmt.Errorf("cannot find the relevant target database option for flag %q", flag)
 	}
@@ -309,20 +414,20 @@ func configViper(cmd *cobra.Command, flagsInConfig []string) error {
 	initConfig()
 
 	// target-flags are only available for replication start command
-	if cmd.CalledAs() == startReplicationSubCmd {
+	if cmd.CalledAs() == startReplicationSubCmd || cmd.CalledAs() == replicationStatusSubCmd {
 		for targetFlag := range targetFlagKeyMap {
 			flagsInConfig = append(flagsInConfig, targetFlag)
 		}
 	}
 	// log-path is a flag that all the subcommands need
 	flagsInConfig = append(flagsInConfig, logPathFlag)
-	// cert-file and key-file are not available for
+	// TLS related flags are not available for
 	// - manage_config
 	// - manage_config show
 	// - create_connection
 	if cmd.CalledAs() != manageConfigSubCmd &&
 		cmd.CalledAs() != configShowSubCmd && cmd.CalledAs() != createConnectionSubCmd {
-		flagsInConfig = append(flagsInConfig, certFileFlag, keyFileFlag)
+		flagsInConfig = append(flagsInConfig, certFileFlag, keyFileFlag, caCertFileFlag, tlsModeFlag)
 	}
 
 	// bind viper keys to cobra flags
@@ -351,17 +456,11 @@ func configViper(cmd *cobra.Command, flagsInConfig []string) error {
 
 // bind viper keys to env vars
 func bindKeysToEnv() error {
-	err := viper.BindEnv(logPathKey, vclusterLogPathEnv)
-	if err != nil {
-		return fmt.Errorf("fail to bind viper key %q to environment variable %q: %w", logPathKey, vclusterLogPathEnv, err)
-	}
-	err = viper.BindEnv(keyFileKey, vclusterKeyFileEnv)
-	if err != nil {
-		return fmt.Errorf("fail to bind viper key %q to environment variable %q: %w", keyFileKey, vclusterKeyFileEnv, err)
-	}
-	err = viper.BindEnv(certFileKey, vclusterCertFileEnv)
-	if err != nil {
-		return fmt.Errorf("fail to bind viper key %q to environment variable %q: %w", certFileKey, vclusterCertFileEnv, err)
+	for key, envVar := range keyEnvVarMap {
+		err := viper.BindEnv(key, envVar)
+		if err != nil {
+			return fmt.Errorf("fail to bind viper key %q to environment variable %q: %w", key, envVar, err)
+		}
 	}
 	return nil
 }
@@ -383,7 +482,7 @@ func loadConfig(cmd *cobra.Command) (err error) {
 
 	// load target db options from connection file to viper
 	// conn file is only available for replication subcommand
-	if cmd.CalledAs() == startReplicationSubCmd {
+	if cmd.CalledAs() == startReplicationSubCmd || cmd.CalledAs() == replicationStatusSubCmd {
 		err := loadConnToViper()
 		if err != nil {
 			return err
@@ -512,10 +611,11 @@ func constructCmds() []*cobra.Command {
 		makeCmdAddSubcluster(),
 		makeCmdRemoveSubcluster(),
 		makeCmdStopSubcluster(),
+		makeCmdStartSubcluster(),
 		makeCmdSandboxSubcluster(),
 		makeCmdUnsandboxSubcluster(),
 		// node-scope cmds
-		makeCmdRestartNodes(),
+		makeCmdStartNodes(),
 		makeCmdAddNode(),
 		makeCmdStopNode(),
 		makeCmdRemoveNode(),
@@ -523,7 +623,13 @@ func constructCmds() []*cobra.Command {
 		makeCmdScrutinize(),
 		makeCmdManageConfig(),
 		makeCmdReplication(),
+		makeCmdGetReplicationStatus(),
 		makeCmdCreateConnection(),
+		// hidden cmds (for internal testing only)
+		makeCmdGetDrainingStatus(),
+		makeCmdPromoteSandbox(),
+		makeCmdCreateArchive(),
+		makeCmdSaveRestorePoint(),
 	}
 }
 
@@ -537,12 +643,30 @@ func hideLocalFlags(cmd *cobra.Command, flags []string) {
 	}
 }
 
-// markFlagsRequired will mark local flags as required
-func markFlagsRequired(cmd *cobra.Command, flags []string) {
+// markFlagsRequired marks given flags as required
+func markFlagsRequired(cmd *cobra.Command, flags ...string) {
 	for _, flag := range flags {
 		err := cmd.MarkFlagRequired(flag)
 		if err != nil {
 			fmt.Printf("Warning: fail to mark flag %q required, details: %v\n", flag, err)
+		}
+
+		// emphasize [Required] in the help message
+		f := cmd.Flags().Lookup(flag)
+		if f != nil { // empty flag means not found
+			f.Usage = "[Required] " + f.Usage
+		}
+	}
+}
+
+// markFlagsOneRequired marks one of the given flags as required
+func markFlagsOneRequired(cmd *cobra.Command, flags []string) {
+	cmd.MarkFlagsOneRequired(flags...)
+	for _, flag := range flags {
+		f := cmd.Flags().Lookup(flag)
+		if f != nil { // empty flag means not found
+			oneRequiredGroup := f.Annotations["cobra_annotation_one_required"]
+			f.Usage = fmt.Sprintf("(One of %v is required) ", oneRequiredGroup) + f.Usage
 		}
 	}
 }

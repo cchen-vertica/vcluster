@@ -38,29 +38,35 @@ func makeCmdStopNode() *cobra.Command {
 	cmd := makeBasicCobraCmd(
 		newCmd,
 		stopNodeCmd,
-		"Stop a list of node(s)",
-		`This subcommand stops a node or list or nodes from an existing database.
+		"Stops one or more nodes in a database.",
+		`Stops one or more nodes in a database.
 
-You must provide the host list with the --stop-hosts option followed by 
-one or more hosts to stop as a comma-separated list.
+You must provide the host list with the --stop-hosts option followed 
+by one or more hosts to stop as a comma-separated list.
+
+Caution: If you only have just enough nodes up to establish database quorum 
+and you stop a node, you will lose database quorum and the remaining up 
+nodes will be set to read-only mode to prevent data loss.
 
 Examples:
   # Gracefully stop a node with config file
   vcluster stop_node --stop-hosts 10.20.30.43 \
-	--config /home/dbadmin/vertica_cluster.yaml
+    --config /home/dbadmin/vertica_cluster.yaml \
+    --password "PASSWORD"
 
   # Gracefully stop nodes with user input
   vcluster stop_node --db-name test_db --stop-hosts 10.20.30.40,10.20.30.41 \
-    --hosts 10.20.30.40,10.20.30.41,10.20.30.42 
+    --hosts 10.20.30.40,10.20.30.41,10.20.30.42 \
+    --password "PASSWORD"
 `,
-		[]string{dbNameFlag, hostsFlag, configFlag, passwordFlag},
+		[]string{dbNameFlag, hostsFlag, ipv6Flag, configFlag, passwordFlag},
 	)
 
 	// local flags
 	newCmd.setLocalFlags(cmd)
 
 	// require hosts to stop
-	markFlagsRequired(cmd, []string{stopNodeFlag})
+	markFlagsRequired(cmd, stopNodeFlag)
 	return cmd
 }
 
@@ -85,12 +91,14 @@ func (c *CmdStopNode) Parse(inputArgv []string, logger vlog.Printer) error {
 
 func (c *CmdStopNode) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()")
-	err := c.getCertFilesFromCertPaths(&c.stopNodeOptions.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.stopNodeOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 
-	err = c.ValidateParseBaseOptions(&c.stopNodeOptions.DatabaseOptions)
+	err := c.ValidateParseBaseOptions(&c.stopNodeOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
@@ -107,7 +115,7 @@ func (c *CmdStopNode) Run(vcc vclusterops.ClusterCommands) error {
 		vcc.LogError(err, "failed to stop the nodes", "Nodes", c.stopNodeOptions.StopHosts)
 		return err
 	}
-	vcc.PrintInfo("Successfully stopped the nodes %v", c.stopNodeOptions.StopHosts)
+	vcc.DisplayInfo("Successfully stopped the nodes %v", c.stopNodeOptions.StopHosts)
 	return nil
 }
 

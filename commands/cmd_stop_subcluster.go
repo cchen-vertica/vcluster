@@ -46,22 +46,17 @@ func makeCmdStopSubcluster() *cobra.Command {
 	cmd := makeBasicCobraCmd(
 		newCmd,
 		stopSCSubCmd,
-		"Stop a subcluster",
-		`This subcommand stops a subcluster from an existing Eon Mode database.
-
-You must provide the subcluster name with the --subcluster option.
-
-All hosts in the subcluster will be stopped. You cannot stop a sandboxed
-subcluster.
+		"Stops a subcluster",
+		`Stops a subcluster and all its hosts.
 
 Examples:
   # Gracefully stop a subcluster with config file
   vcluster stop_subcluster --subcluster sc1 --drain-seconds 10 \
-    --config /opt/vertica/config/vertica_cluster.yaml
+    --config /opt/vertica/config/vertica_cluster.yaml --password "PASSWORD"
 
   # Forcibly stop a subcluster with config file
   vcluster stop_subcluster --subcluster sc1 --force \
-    --config /opt/vertica/config/vertica_cluster.yaml
+    --config /opt/vertica/config/vertica_cluster.yaml --password "PASSWORD"
 
   # Gracefully stop a subcluster with user input
   vcluster stop_subcluster --db-name test_db --subcluster sc1 \
@@ -69,7 +64,7 @@ Examples:
   
   # Forcibly stop a subcluster with user input
   vcluster stop_subcluster --db-name test_db --subcluster sc1 \
-    --hosts 10.20.30.40,10.20.30.41,10.20.30.42 --force
+    --hosts 10.20.30.40,10.20.30.41,10.20.30.42 --force --password "PASSWORD"
 `,
 		[]string{dbNameFlag, hostsFlag, ipv6Flag, eonModeFlag, configFlag, passwordFlag},
 	)
@@ -78,7 +73,7 @@ Examples:
 	newCmd.setLocalFlags(cmd)
 
 	// require name of subcluster to add
-	markFlagsRequired(cmd, []string{subclusterFlag})
+	markFlagsRequired(cmd, subclusterFlag)
 
 	// hide eon mode flag since we expect it to come from config file, not from user input
 	hideLocalFlags(cmd, []string{eonModeFlag})
@@ -92,23 +87,20 @@ func (c *CmdStopSubcluster) setLocalFlags(cmd *cobra.Command) {
 		&c.stopSCOptions.DrainSeconds,
 		"drain-seconds",
 		util.DefaultDrainSeconds,
-		util.GetEonFlagMsg("seconds to wait for user connections to close."+
-			" Default value is "+strconv.Itoa(util.DefaultDrainSeconds)+" seconds."+
-			" When the time expires, connections will be forcibly closed and the subcluster will shut down."+
-			" If the value is 0, VCluster closes all user connections immediately."+
-			" If the value is negative, VCluster waits indefinitely until all user sessions disconnect"),
+		util.GetEonFlagMsg(util.TimeToWaitToClose+util.TimeExpire+util.CloseAllConns+util.InfiniteWaitTime+
+			util.Default+strconv.Itoa(util.DefaultDrainSeconds)),
 	)
 	cmd.Flags().StringVar(
 		&c.stopSCOptions.SCName,
 		subclusterFlag,
 		"",
-		"The name of the target subcluster",
+		"The name of the subcluster to stop.",
 	)
 	cmd.Flags().BoolVar(
 		&c.stopSCOptions.Force,
 		"force",
 		false,
-		"Force the subcluster to shutdown immediately even if users are connected",
+		"Force the subcluster to shut down immediately even if users are connected.",
 	)
 	cmd.MarkFlagsMutuallyExclusive("drain-seconds", "force")
 }
@@ -131,12 +123,14 @@ func (c *CmdStopSubcluster) Parse(inputArgv []string, logger vlog.Printer) error
 
 func (c *CmdStopSubcluster) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()")
-	err := c.getCertFilesFromCertPaths(&c.stopSCOptions.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.stopSCOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 
-	err = c.ValidateParseBaseOptions(&c.stopSCOptions.DatabaseOptions)
+	err := c.ValidateParseBaseOptions(&c.stopSCOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
@@ -153,7 +147,7 @@ func (c *CmdStopSubcluster) Run(vcc vclusterops.ClusterCommands) error {
 		vcc.LogError(err, "failed to stop the subcluster", "Subcluster", options.SCName)
 		return err
 	}
-	vcc.PrintInfo("Successfully stopped subcluster %s", options.SCName)
+	vcc.DisplayInfo("Successfully stopped subcluster %s", options.SCName)
 	return nil
 }
 

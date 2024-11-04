@@ -73,19 +73,19 @@ type VFetchNodesDetailsOptions struct {
 }
 
 func VFetchNodesDetailsOptionsFactory() VFetchNodesDetailsOptions {
-	opt := VFetchNodesDetailsOptions{}
+	options := VFetchNodesDetailsOptions{}
 	// set default values to the params
-	opt.setDefaultValues()
+	options.setDefaultValues()
 
-	return opt
+	return options
 }
 
 func (options *VFetchNodesDetailsOptions) setDefaultValues() {
 	options.DatabaseOptions.setDefaultValues()
 }
 
-func (options *VFetchNodesDetailsOptions) validateOptions(log vlog.Printer) error {
-	err := options.validateBaseOptions(commandFetchNodesDetails, log)
+func (options *VFetchNodesDetailsOptions) validateParseOptions(logger vlog.Printer) error {
+	err := options.validateBaseOptions(FetchNodesDetailsCmd, logger)
 	if err != nil {
 		return err
 	}
@@ -105,8 +105,8 @@ func (options *VFetchNodesDetailsOptions) analyzeOptions() (err error) {
 	return nil
 }
 
-func (options *VFetchNodesDetailsOptions) validateAnalyzeOptions(log vlog.Printer) error {
-	if err := options.validateOptions(log); err != nil {
+func (options *VFetchNodesDetailsOptions) validateAnalyzeOptions(logger vlog.Printer) error {
+	if err := options.validateParseOptions(logger); err != nil {
 		return err
 	}
 	return options.analyzeOptions()
@@ -133,8 +133,7 @@ func (vcc VClusterCommands) VFetchNodesDetails(options *VFetchNodesDetailsOption
 		return nodesDetails, fmt.Errorf("fail to produce instructions: %w", err)
 	}
 
-	certs := httpsCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+	clusterOpEngine := makeClusterOpEngine(instructions, options)
 
 	err = clusterOpEngine.run(vcc.Log)
 	if err != nil {
@@ -159,7 +158,7 @@ func (vcc *VClusterCommands) produceFetchNodesDetailsInstructions(options *VFetc
 	var instructions []clusterOp
 
 	// when password is specified, we will use username/password to call https endpoints
-	err := options.setUsePassword(vcc.Log)
+	err := options.setUsePasswordAndValidateUsernameIfNeeded(vcc.Log)
 	if err != nil {
 		return instructions, err
 	}

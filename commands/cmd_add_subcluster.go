@@ -16,8 +16,6 @@
 package commands
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/vertica/vcluster/vclusterops"
@@ -49,35 +47,34 @@ func makeCmdAddSubcluster() *cobra.Command {
 		newCmd,
 		addSCSubCmd,
 		"Add a subcluster",
-		`This subcommand adds a new subcluster to an existing Eon Mode database.
-
-You must provide a subcluster name with the --subcluster option.
-
-By default, the new subcluster is secondary. To add a primary subcluster, use
-the --is-primary flag.
+		`This command adds a new subcluster to an Eon Mode database.
 
 Examples:
   # Add a subcluster with config file
-  vcluster db_add_subcluster --subcluster sc1 \
+  vcluster add_subcluster --subcluster sc1 \
     --config /opt/vertica/config/vertica_cluster.yaml \
-    --is-primary --control-set-size 1
+    --is-primary --control-set-size 1 \
+    --password "PASSWORD"
 
   # Add a subcluster with user input
-  vcluster db_add_subcluster --subcluster sc1 --db-name test_db \
+  vcluster add_subcluster --subcluster sc1 --db-name test_db \
     --hosts 10.20.30.40,10.20.30.41,10.20.30.42 \
-    --is-primary --control-set-size -1
+    --is-primary --control-set-size -1 \
+    --password "PASSWORD"
 
   # Add a subcluster and new nodes in the subcluster with config file
-  vcluster db_add_subcluster --subcluster sc1 \
+  vcluster add_subcluster --subcluster sc1 \
     --config /opt/vertica/config/vertica_cluster.yaml \
-    --is-primary --control-set-size 1 --new-hosts 10.20.30.43
+    --is-primary --control-set-size 1 --new-hosts 10.20.30.43 \
+    --password "PASSWORD"
 
   # Add a subcluster new nodes in the subcluster with user input
-  vcluster db_add_subcluster --subcluster sc1 --db-name test_db \
-	--hosts 10.20.30.40,10.20.30.41,10.20.30.42 \
-	--is-primary --control-set-size -1 --new-hosts 10.20.30.43
+  vcluster add_subcluster --subcluster sc1 --db-name test_db \
+    --hosts 10.20.30.40,10.20.30.41,10.20.30.42 \
+    --is-primary --control-set-size -1 --new-hosts 10.20.30.43 \
+    --password "PASSWORD"
 `,
-		[]string{dbNameFlag, configFlag, hostsFlag, eonModeFlag, passwordFlag,
+		[]string{dbNameFlag, configFlag, hostsFlag, ipv6Flag, eonModeFlag, passwordFlag,
 			dataPathFlag, depotPathFlag},
 	)
 
@@ -89,7 +86,7 @@ Examples:
 	newCmd.setHiddenFlags(cmd)
 
 	// require name of subcluster to add
-	markFlagsRequired(cmd, []string{subclusterFlag})
+	markFlagsRequired(cmd, subclusterFlag)
 
 	// hide eon mode flag since we expect it to come from config file, not from user input
 	hideLocalFlags(cmd, []string{eonModeFlag})
@@ -103,43 +100,44 @@ func (c *CmdAddSubcluster) setLocalFlags(cmd *cobra.Command) {
 		&c.addSubclusterOptions.SCName,
 		subclusterFlag,
 		"",
-		"The name of the new subcluster",
+		"The name of the new subcluster. This string must conform to the format used for database names.",
 	)
 	cmd.Flags().BoolVar(
 		&c.addSubclusterOptions.IsPrimary,
 		"is-primary",
 		false,
-		"The new subcluster will be a primary subcluster",
+		"Whether the new subcluster should be a primary subcluster. If this option is omitted, new subclusters are secondary.",
 	)
 	cmd.Flags().IntVar(
 		&c.addSubclusterOptions.ControlSetSize,
 		"control-set-size",
 		vclusterops.ControlSetSizeDefaultValue,
-		"The number of nodes that will run spread within the subcluster",
+		"The number of control nodes in the subcluster (default: -1, all nodes in the subcluster are control nodes).",
 	)
 	cmd.Flags().StringSliceVar(
 		&c.addSubclusterOptions.NewHosts,
 		addNodeFlag,
 		[]string{},
-		"Comma-separated list of host(s) to add to the new subcluster",
+		"A comma-separated list of hosts or IP addresses to add to the subcluster.",
 	)
 	cmd.Flags().BoolVar(
 		&c.addSubclusterOptions.ForceRemoval,
 		"force-removal",
 		false,
-		"Whether to force clean-up of existing directories before adding host(s)",
+		"Whether to delete any existing database directories in the new hosts before attempting to add them.",
 	)
 	cmd.Flags().BoolVar(
 		c.addSubclusterOptions.SkipRebalanceShards,
 		"skip-rebalance-shards",
 		false,
-		util.GetEonFlagMsg("Skip the subcluster shards rebalancing"),
+		util.GetEonFlagMsg("Whether to skip shard rebalancing."),
 	)
 	cmd.Flags().StringVar(
 		&c.addSubclusterOptions.DepotSize,
 		"depot-size",
 		"",
-		util.GetEonFlagMsg("Size of depot"),
+		util.GetEonFlagMsg(util.DepotFmtMsg+util.DepotSizeKMGTMsg+
+			"integer%, which expresses the depot size as a percentage of the total disk size.\n"),
 	)
 }
 
@@ -179,12 +177,14 @@ func (c *CmdAddSubcluster) Parse(inputArgv []string, logger vlog.Printer) error 
 // all validations of the arguments should go in here
 func (c *CmdAddSubcluster) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()")
-	err := c.getCertFilesFromCertPaths(&c.addSubclusterOptions.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.addSubclusterOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 
-	err = c.ValidateParseBaseOptions(&c.addSubclusterOptions.DatabaseOptions)
+	err := c.ValidateParseBaseOptions(&c.addSubclusterOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
@@ -203,34 +203,35 @@ func (c *CmdAddSubcluster) Run(vcc vclusterops.ClusterCommands) error {
 
 	err := vcc.VAddSubcluster(options)
 	if err != nil {
-		vcc.LogError(err, "failed to add subcluster")
+		vcc.LogError(err, "fail to add subcluster")
 		return err
 	}
 
 	if len(options.NewHosts) > 0 {
-		fmt.Printf("Adding hosts %v to subcluster %s\n",
-			options.NewHosts, options.SCName)
+		vlog.DisplayColorInfo("Adding hosts %v to subcluster %s", options.NewHosts, options.SCName)
 
 		options.VAddNodeOptions.DatabaseOptions = c.addSubclusterOptions.DatabaseOptions
 		options.VAddNodeOptions.SCName = c.addSubclusterOptions.SCName
 
 		vdb, err := vcc.VAddNode(&options.VAddNodeOptions)
 		if err != nil {
-			vcc.LogError(err, "failed to add nodes into the new subcluster")
+			const msg = "Failed to add nodes to the new subcluster"
+			vcc.DisplayError("%s\nHint: The subcluster %q was successfully created; use add_node to add the nodes.\n",
+				msg, options.VAddNodeOptions.SCName)
 			return err
 		}
 		// update db info in the config file
-		err = writeConfig(&vdb, vcc.GetLog())
+		err = writeConfig(&vdb, true /*forceOverwrite*/)
 		if err != nil {
-			vcc.PrintWarning("fail to write config file, details: %s", err)
+			vcc.DisplayWarning("Failed to write config file, details: %s", err)
 		}
 	}
 
 	if len(options.NewHosts) > 0 {
-		vcc.PrintInfo("Added subcluster %s with nodes %v to database %s",
+		vcc.DisplayInfo("Successfully added subcluster %s with nodes %v to database %s",
 			options.SCName, options.NewHosts, options.DBName)
 	} else {
-		vcc.PrintInfo("Added subcluster %s to database %s", options.SCName, options.DBName)
+		vcc.DisplayInfo("Successfully added subcluster %s to database %s", options.SCName, options.DBName)
 	}
 	return nil
 }

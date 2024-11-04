@@ -59,21 +59,26 @@ func makeHTTPSPollSubclusterNodeStateOp(scName string,
 	return op, nil
 }
 
-func makeHTTPSPollSubclusterNodeStateUpOp(scName string,
+func makeHTTPSPollSubclusterNodeStateUpOp(hosts []string, scName string, timeout int,
 	useHTTPPassword bool, userName string,
 	httpsPassword *string) (httpsPollSubclusterNodeStateOp, error) {
 	op, err := makeHTTPSPollSubclusterNodeStateOp(scName, useHTTPPassword, userName, httpsPassword)
 	op.checkDown = false
 	op.description += " to come up"
+	op.hosts = hosts
+	if timeout != 0 {
+		op.timeout = timeout
+	}
 	return op, err
 }
 
-func makeHTTPSPollSubclusterNodeStateDownOp(scName string,
+func makeHTTPSPollSubclusterNodeStateDownOp(hosts []string, scName string,
 	useHTTPPassword bool, userName string,
 	httpsPassword *string) (httpsPollSubclusterNodeStateOp, error) {
 	op, err := makeHTTPSPollSubclusterNodeStateOp(scName, useHTTPPassword, userName, httpsPassword)
 	op.checkDown = true
 	op.description += " to come down"
+	op.hosts = hosts
 	return op, err
 }
 
@@ -86,8 +91,8 @@ func (op *httpsPollSubclusterNodeStateOp) setupClusterHTTPRequest(hosts []string
 	for _, host := range hosts {
 		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = GetMethod
-		httpRequest.Timeout = defaultHTTPRequestTimeoutSeconds
-		httpRequest.buildHTTPSEndpoint("nodes/" + host)
+		httpRequest.Timeout = defaultHTTPSRequestTimeoutSeconds
+		httpRequest.buildHTTPSEndpoint(util.NodesEndpoint + host)
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -101,8 +106,16 @@ func (op *httpsPollSubclusterNodeStateOp) setupClusterHTTPRequest(hosts []string
 func (op *httpsPollSubclusterNodeStateOp) prepare(execContext *opEngineExecContext) error {
 	// We need to ensure that the https request to fetch the node state goes to the sandboxed node
 	// because the main cluster will report the status of sandboxed nodes as "UNKNOWN".
-	for _, vnode := range execContext.scNodesInfo {
-		op.hosts = append(op.hosts, vnode.Address)
+	if len(op.hosts) == 0 {
+		for _, vnode := range execContext.scNodesInfo {
+			op.hosts = append(op.hosts, vnode.Address)
+		}
+	}
+	// if there are still no hosts to check, e.g. empty subcluster, skip the op
+	if len(op.hosts) == 0 {
+		op.logger.PrintInfo("[%s] No nodes to poll for. Skipping operation.", op.name)
+		op.skipExecute = true
+		return nil
 	}
 	execContext.dispatcher.setup(op.hosts)
 	return op.setupClusterHTTPRequest(op.hosts)

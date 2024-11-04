@@ -66,6 +66,12 @@ type DatabaseOptions struct {
 	Cert string
 	// TLS CA Certificate
 	CaCert string
+	// Whether to validate NMA server cert signature chain
+	DoVerifyNMAServerCert bool
+	// Whether to validate HTTPS server cert signature chain
+	DoVerifyHTTPSServerCert bool
+	// Whether to validate server cert hostname if signature validation is enabled
+	DoVerifyPeerCertHostname bool
 
 	/* part 4: other info */
 
@@ -84,25 +90,6 @@ const (
 	catalogPath = ""
 )
 
-const (
-	commandCreateDB          = "create_db"
-	commandDropDB            = "drop_db"
-	commandStopDB            = "stop_db"
-	commandStartDB           = "start_db"
-	commandAddNode           = "db_add_node"
-	commandRemoveNode        = "db_remove_node"
-	commandAddCluster        = "db_add_subcluster"
-	commandRemoveCluster     = "db_remove_subcluster"
-	commandStopCluster       = "stop_subcluster"
-	commandSandboxSC         = "sandbox_subcluster"
-	commandUnsandboxSC       = "unsandbox_subcluster"
-	commandShowRestorePoints = "show_restore_points"
-	commandInstallPackages   = "install_packages"
-	commandConfigRecover     = "manage_config_recover"
-	commandReplicationStart  = "replication_start"
-	commandFetchNodesDetails = "fetch_nodes_details"
-)
-
 func DatabaseOptionsFactory() DatabaseOptions {
 	opt := DatabaseOptions{}
 	// set default values to the params
@@ -115,8 +102,9 @@ func (opt *DatabaseOptions) setDefaultValues() {
 	opt.ConfigurationParameters = make(map[string]string)
 }
 
-func (opt *DatabaseOptions) validateBaseOptions(commandName string, log vlog.Printer) error {
+func (opt *DatabaseOptions) validateBaseOptions(cmdType CmdType, log vlog.Printer) error {
 	// get vcluster commands
+	commandName := cmdType.CmdString()
 	log.WithName(commandName)
 	// database name
 	if opt.DBName == "" {
@@ -141,7 +129,7 @@ func (opt *DatabaseOptions) validateBaseOptions(commandName string, log vlog.Pri
 
 	// config directory
 	// VER-91801: remove this condition once re_ip supports the config file
-	if !slices.Contains([]string{"re_ip"}, commandName) {
+	if !slices.Contains([]string{ReIPCmd.CmdString()}, commandName) {
 		err = opt.validateConfigDir(commandName)
 		if err != nil {
 			return err
@@ -159,6 +147,23 @@ func (opt *DatabaseOptions) validateBaseOptions(commandName string, log vlog.Pri
 	return nil
 }
 
+// validateAuthOptions will validate that the user provides some form of valid
+// authentication information, either password or key and certs for TLS authentication;
+// key and certs may either be explicitly provided in the options or implicitly
+// loaded from the default locations in local file system
+func (opt *DatabaseOptions) validateAuthOptions(_ string, _ vlog.Printer) error {
+	// need to provide a password or key and certs
+	if opt.Password == nil && (opt.Cert == "" || opt.Key == "") {
+		// validate key and cert files in local file system
+		_, err := getCertFilePaths()
+		if err != nil {
+			// in case that the key or cert files do not exist
+			return fmt.Errorf("must provide either a password or a key-certificate pair")
+		}
+	}
+	return nil
+}
+
 // validateHostsAndPwd will validate raw hosts and password
 func (opt *DatabaseOptions) validateHostsAndPwd(commandName string, log vlog.Printer) error {
 	// hosts
@@ -168,9 +173,8 @@ func (opt *DatabaseOptions) validateHostsAndPwd(commandName string, log vlog.Pri
 
 	// when we create db, we need to set password to "" if user did not provide one
 	if opt.Password == nil {
-		if commandName == commandCreateDB {
+		if commandName == CreateDBCmd.CmdString() {
 			opt.Password = new(string)
-			*opt.Password = ""
 		}
 		log.PrintInfo("no password specified, using none")
 	}
@@ -180,7 +184,7 @@ func (opt *DatabaseOptions) validateHostsAndPwd(commandName string, log vlog.Pri
 // validate catalog, data, and depot paths
 func (opt *DatabaseOptions) validatePaths(commandName string) error {
 	// validate for the following commands only
-	commands := []string{commandCreateDB, commandDropDB, commandConfigRecover}
+	commands := []string{CreateDBCmd.CmdString(), DropDBCmd.CmdString(), ConfigRecoverCmd.CmdString()}
 	if !slices.Contains(commands, commandName) {
 		return nil
 	}
@@ -193,7 +197,7 @@ func (opt *DatabaseOptions) validatePaths(commandName string) error {
 
 	// data prefix
 	// `manage_config recover` does not need the data-path
-	if commandName != commandConfigRecover {
+	if commandName != ConfigRecoverCmd.CmdString() {
 		err = util.ValidateRequiredAbsPath(opt.DataPrefix, "data path")
 		if err != nil {
 			return err
@@ -219,8 +223,10 @@ func (opt *DatabaseOptions) validateCatalogPath() error {
 func (opt *DatabaseOptions) validateConfigDir(commandName string) error {
 	// validate for the following commands only
 	// TODO: add other commands into the command list
-	commands := []string{commandCreateDB, commandDropDB, commandStopDB, commandStartDB, commandAddCluster, commandRemoveCluster,
-		commandSandboxSC, commandUnsandboxSC, commandShowRestorePoints, commandAddNode, commandRemoveNode, commandInstallPackages}
+	commands := []string{CreateDBCmd.CmdString(), DropDBCmd.CmdString(), StopDBCmd.CmdString(), StartDBCmd.CmdString(),
+		AddSubclusterCmd.CmdString(), RemoveSubclusterCmd.CmdString(),
+		SandboxSCCmd.CmdString(), UnsandboxSCCmd.CmdString(), ShowRestorePointsCmd.CmdString(), AddNodeCmd.CmdString(),
+		RemoveNodeCmd.CmdString(), InstallPackagesCmd.CmdString()}
 	if slices.Contains(commands, commandName) {
 		return nil
 	}
@@ -250,7 +256,7 @@ func (opt *DatabaseOptions) validateUserName(log vlog.Printer) error {
 	return nil
 }
 
-func (opt *DatabaseOptions) setUsePassword(log vlog.Printer) error {
+func (opt *DatabaseOptions) setUsePasswordAndValidateUsernameIfNeeded(log vlog.Printer) error {
 	// when password is specified,
 	// we will use username/password to call https endpoints
 	opt.usePassword = false
@@ -262,6 +268,14 @@ func (opt *DatabaseOptions) setUsePassword(log vlog.Printer) error {
 		}
 	}
 
+	return nil
+}
+
+func (opt *DatabaseOptions) setUsePassword(_ vlog.Printer) error {
+	opt.usePassword = false
+	if opt.Password != nil {
+		opt.usePassword = true
+	}
 	return nil
 }
 
@@ -300,8 +314,7 @@ func (opt *DatabaseOptions) getVDBWhenDBIsDown(vcc VClusterCommands) (vdb VCoord
 		&nmaGetNodesInfoOp,
 	)
 
-	certs := httpsCerts{key: opt.Key, cert: opt.Cert, caCert: opt.CaCert}
-	clusterOpEngine := makeClusterOpEngine(instructions1, &certs)
+	clusterOpEngine := makeClusterOpEngine(instructions1, opt)
 	err = clusterOpEngine.run(vcc.Log)
 	if err != nil {
 		vcc.Log.PrintError("fail to retrieve node names from NMA /nodes: %v", err)
@@ -311,7 +324,7 @@ func (opt *DatabaseOptions) getVDBWhenDBIsDown(vcc VClusterCommands) (vdb VCoord
 	// step 2: get node details from cluster_config.json
 	vdb2 := VCoordinationDatabase{}
 	var instructions2 []clusterOp
-	currConfigFileSrcPath := opt.getCurrConfigFilePath()
+	currConfigFileSrcPath := opt.getCurrConfigFilePath(util.MainClusterSandbox)
 	nmaDownLoadFileOp, err := makeNMADownloadFileOp(opt.Hosts, currConfigFileSrcPath, currConfigFileDestPath, catalogPath,
 		opt.ConfigurationParameters, &vdb2)
 	if err != nil {
@@ -319,7 +332,7 @@ func (opt *DatabaseOptions) getVDBWhenDBIsDown(vcc VClusterCommands) (vdb VCoord
 	}
 	instructions2 = append(instructions2, &nmaDownLoadFileOp)
 
-	clusterOpEngine = makeClusterOpEngine(instructions2, &certs)
+	clusterOpEngine = makeClusterOpEngine(instructions2, opt)
 	err = clusterOpEngine.run(vcc.Log)
 	if err != nil {
 		vcc.Log.PrintError("fail to retrieve node details from %s: %v", descriptionFileName, err)
@@ -352,11 +365,20 @@ func (opt *DatabaseOptions) getVDBWhenDBIsDown(vcc VClusterCommands) (vdb VCoord
 	return vdb, nil
 }
 
-// getCurrConfigFilePath can make the current description file path using db name and communal storage location in the options
-func (opt *DatabaseOptions) getCurrConfigFilePath() string {
-	// description file will be in the location: {communal_storage_location}/metadata/{db_name}/cluster_config.json
+// getCurrConfigFilePath can make the current description file path using the database (or sandbox) name and
+// communal storage location in the options
+func (opt *DatabaseOptions) getCurrConfigFilePath(sandbox string) string {
+	descriptor := opt.DBName
+	if sandbox != util.MainClusterSandbox {
+		descriptor = sandbox
+	}
+	// For main cluster or a cluster without sandboxes, description file will be in the location:
+	// {communal_storage_location}/metadata/{db_name}/cluster_config.json
 	// an example: s3://tfminio/test_loc/metadata/test_db/cluster_config.json
-	descriptionFilePath := filepath.Join(opt.CommunalStorageLocation, descriptionFileMetadataFolder, opt.DBName, descriptionFileName)
+	// For sandboxes, description file will be in the location:
+	// {communal_storage_location}/metadata/{sandbox_name}/cluster_config.json
+	// an example: s3://tfminio/test_loc/metadata/sand/cluster_config.json
+	descriptionFilePath := filepath.Join(opt.CommunalStorageLocation, descriptionFileMetadataFolder, descriptor, descriptionFileName)
 	// filepath.Join() will change "://" of the remote communal storage path to ":/"
 	// as a result, we need to change the separator back to url format
 	descriptionFilePath = strings.Replace(descriptionFilePath, ":/", "://", 1)
@@ -395,9 +417,31 @@ func (opt *DatabaseOptions) isSpreadEncryptionEnabled() (enabled bool, encryptio
 
 func (opt *DatabaseOptions) runClusterOpEngine(log vlog.Printer, instructions []clusterOp) error {
 	// Create a VClusterOpEngine, and add certs to the engine
-	certs := httpsCerts{key: opt.Key, cert: opt.Cert, caCert: opt.CaCert}
-	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+	clusterOpEngine := makeClusterOpEngine(instructions, opt)
 
 	// Give the instructions to the VClusterOpEngine to run
 	return clusterOpEngine.run(log)
 }
+
+/* Begin opTLSOptions interface */
+
+// hasCerts indicates we want to use in memory certs.  This doesn't check
+// the presence of a CA cert, as we want to support providing a cert
+// even when vclusterops isn't validating the peer cert.
+func (opt *DatabaseOptions) hasCerts() bool {
+	return opt.Key != "" && opt.Cert != ""
+}
+
+func (opt *DatabaseOptions) getCerts() *httpsCerts {
+	return &httpsCerts{key: opt.Key, cert: opt.Cert, caCert: opt.CaCert}
+}
+
+func (opt *DatabaseOptions) getTLSModes() *tlsModes {
+	return &tlsModes{
+		doVerifyNMAServerCert:    opt.DoVerifyNMAServerCert,
+		doVerifyHTTPSServerCert:  opt.DoVerifyHTTPSServerCert,
+		doVerifyPeerCertHostname: opt.DoVerifyPeerCertHostname,
+	}
+}
+
+/* End opTLSOptions interface */

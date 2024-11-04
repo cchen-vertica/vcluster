@@ -26,9 +26,6 @@ import (
 	"github.com/vertica/vcluster/vclusterops/vlog"
 )
 
-// const to sync cmd, options parsing, and this
-const VScrutinizeTypeName = "scrutinize"
-
 // files and folders used by scrutinize
 const ScrutinizeOutputBasePath = "/tmp/scrutinize"
 const scrutinizeRemoteOutputPath = ScrutinizeOutputBasePath + "/remote"
@@ -54,6 +51,7 @@ type VScrutinizeOptions struct {
 	IncludeRos                  bool
 	IncludeExternalTableDetails bool
 	IncludeUDXDetails           bool
+	SkipCollectLibs             bool
 	LogAgeOldestTime            string
 	LogAgeNewestTime            string
 	LogAgeHours                 int // max log age from input
@@ -64,9 +62,9 @@ type VScrutinizeOptions struct {
 }
 
 func VScrutinizeOptionsFactory() VScrutinizeOptions {
-	opt := VScrutinizeOptions{}
-	opt.setDefaultValues()
-	return opt
+	options := VScrutinizeOptions{}
+	options.setDefaultValues()
+	return options
 }
 
 // human description of the scrutinize formats for archived log time range parameters
@@ -143,7 +141,7 @@ func (options *VScrutinizeOptions) getHoursAgo(timeString, timeVarName string, l
 
 func (options *VScrutinizeOptions) validateRequiredOptions(logger vlog.Printer) error {
 	// checks for correctness, but not for presence of all flags
-	err := options.validateBaseOptions(VScrutinizeTypeName, logger)
+	err := options.validateBaseOptions(ScrutinizeCmd, logger)
 	if err != nil {
 		return err
 	}
@@ -154,7 +152,12 @@ func (options *VScrutinizeOptions) validateRequiredOptions(logger vlog.Printer) 
 }
 
 func (options *VScrutinizeOptions) validateParseOptions(logger vlog.Printer) error {
-	return options.validateRequiredOptions(logger)
+	// batch 1: validate required parameters
+	err := options.validateRequiredOptions(logger)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // analyzeOptions will modify some options based on what is chosen
@@ -174,7 +177,7 @@ func (options *VScrutinizeOptions) analyzeOptions(logger vlog.Printer) (err erro
 		return err
 	}
 
-	err = options.setUsePassword(logger)
+	err = options.setUsePasswordAndValidateUsernameIfNeeded(logger)
 	return err
 }
 
@@ -376,7 +379,7 @@ func (vcc VClusterCommands) produceScrutinizeInstructions(options *VScrutinizeOp
 
 	// run and stage diagnostic command results -- see NMA for what commands are run
 	stageCommandsOp, err := makeNMAStageCommandsOp(vcc.Log, options.ID, scrutinizeBatchContext,
-		options.Hosts, hostNodeNameMap, hostCatPathMap)
+		options.Hosts, hostNodeNameMap, hostCatPathMap, options.SkipCollectLibs)
 	if err != nil {
 		return nil, err
 	}

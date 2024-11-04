@@ -31,9 +31,18 @@ type VInstallPackagesOptions struct {
 }
 
 func VInstallPackagesOptionsFactory() VInstallPackagesOptions {
-	opt := VInstallPackagesOptions{}
-	opt.DatabaseOptions.setDefaultValues()
-	return opt
+	options := VInstallPackagesOptions{}
+	options.DatabaseOptions.setDefaultValues()
+	return options
+}
+
+func (options *VInstallPackagesOptions) validateParseOptions(logger vlog.Printer) error {
+	err := options.validateBaseOptions(InstallPackagesCmd, logger)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // resolve hostnames to be IPs
@@ -50,8 +59,8 @@ func (options *VInstallPackagesOptions) analyzeOptions() (err error) {
 	return nil
 }
 
-func (options *VInstallPackagesOptions) validateAnalyzeOptions(log vlog.Printer) error {
-	if err := options.validateBaseOptions("install_packages", log); err != nil {
+func (options *VInstallPackagesOptions) validateAnalyzeOptions(logger vlog.Printer) error {
+	if err := options.validateParseOptions(logger); err != nil {
 		return err
 	}
 	return options.analyzeOptions()
@@ -77,9 +86,9 @@ func (vcc VClusterCommands) VInstallPackages(options *VInstallPackagesOptions) (
 		return nil, fmt.Errorf("fail to production instructions: %w", err)
 	}
 
-	// Create a VClusterOpEngine. No need for certs since this operation doesn't
-	// talk to the NMA.
-	clusterOpEngine := makeClusterOpEngine(instructions, &httpsCerts{})
+	// Create a VClusterOpEngine, and add certs in case the Vertica HTTPS service
+	// is configured to require certs.
+	clusterOpEngine := makeClusterOpEngine(instructions, options)
 
 	// Give the instructions to the VClusterOpEngine to run
 	runError := clusterOpEngine.run(vcc.Log)
@@ -112,7 +121,7 @@ func (vcc *VClusterCommands) produceInstallPackagesInstructions(opts *VInstallPa
 	}
 
 	httpsGetUpNodesOp, err := makeHTTPSGetUpNodesOp(opts.DBName, opts.Hosts,
-		usePassword, opts.UserName, opts.Password, InstallPackageCmd)
+		usePassword, opts.UserName, opts.Password, InstallPackagesCmd)
 	if err != nil {
 		return nil, nil, err
 	}

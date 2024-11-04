@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -27,6 +28,8 @@ import (
 )
 
 type NMAHealthOpResponse map[string]string
+
+const InvalChar = "invalid character in "
 
 func redirectLog() (*bytes.Buffer, vlog.Printer) {
 	// redirect log to a local bytes.Buffer
@@ -108,6 +111,13 @@ func TestResolveToOneIP(t *testing.T) {
 	res, err = ResolveToOneIP(hostname, false)
 	assert.NotNil(t, err)
 	assert.Equal(t, res, "")
+
+	// given IP does not match its IP version
+	_, err = ResolveToOneIP("192.168.1.101", true)
+	assert.ErrorContains(t, err, "cannot resolve 192.168.1.101 as IPv6 address")
+
+	_, err = ResolveToOneIP("2001:db8::8:800:200c:417a", false)
+	assert.ErrorContains(t, err, "cannot resolve 2001:db8::8:800:200c:417a as IPv4 address")
 }
 
 func TestGetCleanPath(t *testing.T) {
@@ -249,24 +259,106 @@ func TestNewErrorFormatVerb(t *testing.T) {
 	assert.EqualError(t, oldErr3, newErr3.Error())
 }
 
-func TestValidateDBName(t *testing.T) {
+func TestValidateName(t *testing.T) {
 	// positive cases
 	obj := "database"
-	err := ValidateName("test_db", obj)
+	err := ValidateName("test_db", obj, false)
 	assert.Nil(t, err)
 
-	err = ValidateName("db1", obj)
+	err = ValidateName("db1", obj, false)
 	assert.Nil(t, err)
 
 	// negative cases
-	err = ValidateName("test$db", obj)
-	assert.ErrorContains(t, err, "invalid character in "+obj+" name: $")
+	err = ValidateName("test$db", obj, false)
+	assert.ErrorContains(t, err, InvalChar+obj+" name: $")
 
-	err = ValidateName("[db1]", obj)
-	assert.ErrorContains(t, err, "invalid character in "+obj+" name: [")
+	err = ValidateName("[db1]", obj, false)
+	assert.ErrorContains(t, err, InvalChar+obj+" name: [")
 
-	err = ValidateName("!!??!!db1", obj)
-	assert.ErrorContains(t, err, "invalid character in "+obj+" name: !")
+	err = ValidateName("!!??!!db1", obj, false)
+	assert.ErrorContains(t, err, InvalChar+obj+" name: !")
+
+	err = ValidateName("test-db", obj, false)
+	assert.ErrorContains(t, err, InvalChar+obj+" name: -")
+
+	err = ValidateName("test-db", obj, true)
+	assert.Nil(t, err)
+
+	err = ValidateName("0test-db", obj, true)
+	assert.Nil(t, err)
+}
+
+func TestValidateQualifiedObjectNamePattern(t *testing.T) {
+	// positive cases
+	obj := "schema.database"
+	err := ValidateQualifiedObjectNamePattern(obj, true)
+	assert.Nil(t, err)
+
+	obj = "schema.*"
+	err = ValidateQualifiedObjectNamePattern(obj, true)
+	assert.Nil(t, err)
+
+	obj = "*.database"
+	err = ValidateQualifiedObjectNamePattern(obj, true)
+	assert.Nil(t, err)
+
+	obj = "valid.valid,valid.valid"
+	err = ValidateQualifiedObjectNamePattern(obj, true)
+	assert.Nil(t, err)
+
+	const matchAnySchemaTable = "*.*"
+	err = ValidateQualifiedObjectNamePattern(matchAnySchemaTable, true)
+	assert.Nil(t, err)
+
+	const matchAnyTable = "*"
+	err = ValidateQualifiedObjectNamePattern(matchAnyTable, true)
+	assert.Nil(t, err)
+
+	obj = ".namespace.*.*"
+	err = ValidateQualifiedObjectNamePattern(obj, true)
+	assert.Nil(t, err)
+
+	obj = ".namespace.schema.table"
+	err = ValidateQualifiedObjectNamePattern(obj, false)
+	assert.Nil(t, err)
+
+	// negative cases
+
+	const (
+		invalidCharacter = "invalid character in pattern "
+		invalidPattern   = "invalid pattern "
+	)
+
+	obj = "v_invalid.valid"
+	err = ValidateQualifiedObjectNamePattern(obj, true)
+	assert.ErrorContains(t, err, invalidCharacter+obj+": v_invalid.valid")
+
+	obj = "valid.valid,v_invalid_name.valid"
+	err = ValidateQualifiedObjectNamePattern(obj, true)
+	assert.ErrorContains(t, err, invalidCharacter+obj+": v_invalid_name.valid")
+
+	obj = `valid.v_invalid_TO_loooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo
+	oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo
+	oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooong`
+	err = ValidateQualifiedObjectNamePattern(obj, true)
+	assert.ErrorContains(t, err, "pattern is too long "+obj+
+		`: valid.v_invalid_TO_loooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo
+	oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo
+	oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooong`)
+
+	obj = "no_leading_dot.*.*"
+	err = ValidateQualifiedObjectNamePattern(obj, true)
+	assert.ErrorContains(t, err, invalidPattern+obj+": no_leading_dot.*.*")
+
+	obj = ".wildcards.*.*"
+	err = ValidateQualifiedObjectNamePattern(obj, false)
+	assert.ErrorContains(t, err, invalidPattern+obj+": .wildcards.*.*")
+
+	err = ValidateQualifiedObjectNamePattern(matchAnySchemaTable, false)
+	assert.ErrorContains(t, err, invalidPattern+matchAnySchemaTable+": *.*")
+
+	err = ValidateQualifiedObjectNamePattern(matchAnyTable, false)
+	assert.ErrorContains(t, err, invalidPattern+matchAnyTable+": *")
 }
 
 func TestSetEonFlagHelpMsg(t *testing.T) {
@@ -369,4 +461,31 @@ func TestIsEmptyOrValidTimeStr(t *testing.T) {
 	testTimeString = "invalid time"
 	_, err = IsEmptyOrValidTimeStr(layout, testTimeString)
 	assert.ErrorContains(t, err, "cannot parse")
+}
+
+func TestGetEnvInt(t *testing.T) {
+	key := "TEST_ENV_INT"
+	fallback := 123
+	// positive case: environment variable exists and is a valid integer
+	os.Setenv(key, "456")
+	actual := GetEnvInt(key, fallback)
+	assert.Equal(t, 456, actual)
+
+	// negative case: environment variable does not exist
+	os.Unsetenv(key)
+	actual = GetEnvInt(key, fallback)
+	assert.Equal(t, fallback, actual)
+
+	// negative case: environment variable exists but is not a valid integer
+	os.Setenv(key, "not_an_integer")
+	actual = GetEnvInt(key, fallback)
+	assert.Equal(t, fallback, actual)
+}
+
+func TestGetClusterName(t *testing.T) {
+	cluster := GetClusterName("")
+	assert.Equal(t, "main cluster", cluster)
+
+	cluster = GetClusterName("sand1")
+	assert.Equal(t, "sandbox sand1", cluster)
 }

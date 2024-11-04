@@ -16,6 +16,8 @@
 package commands
 
 import (
+	"encoding/json"
+
 	"github.com/spf13/cobra"
 	"github.com/vertica/vcluster/vclusterops"
 	"github.com/vertica/vcluster/vclusterops/vlog"
@@ -30,6 +32,8 @@ type CmdShowRestorePoints struct {
 	showRestorePointsOptions *vclusterops.VShowRestorePointsOptions
 }
 
+const dateTimeOnly = "in either date-time or date-only format."
+
 func makeCmdShowRestorePoints() *cobra.Command {
 	// CmdShowRestorePoints
 	newCmd := &CmdShowRestorePoints{}
@@ -39,20 +43,20 @@ func makeCmdShowRestorePoints() *cobra.Command {
 	cmd := makeBasicCobraCmd(
 		newCmd,
 		showRestorePointsSubCmd,
-		"Query and list restore point(s) in archive(s)",
-		`This subcommand queries and lists restore point(s) in archive(s).
+		"Shows restore points.",
+		`Shows restore points.
 
-Then --start-timestamp and --end-timestamp options both limit the scope of
-creation timestamps of listed restore points. Both of them expect a timestamp
-in date-time format or date-only format, for example:
+The --start-timestamp and --end-timestamp options let you filter for restore points
+based on their creation timestamp. Both options accept UTC timestamps in date-time
+and date-only format. For example:
+
 "2006-01-02 15:04:05", "2006-01-02", "2006-01-02 15:04:05.000000000".
-Both of them expect a timestamp in UTC timezone.
 
 Examples:
   # List restore points without filters with user input
   vcluster show_restore_points --db-name test_db \
     --hosts 10.20.30.40,10.20.30.41,10.20.30.42 \
-	--communal-storage-location /communal
+	--communal-storage-location /communal 
 
   # List restore points without filters with config file
   vcluster show_restore_points --db-name test_db \
@@ -77,7 +81,7 @@ Examples:
     --start-timestamp 2024-03-04 08:32:33.277569 \
     --end-timestamp 2024-03-04 08:32:34.176391
 `,
-		[]string{dbNameFlag, configFlag, passwordFlag, hostsFlag,
+		[]string{dbNameFlag, configFlag, passwordFlag, hostsFlag, ipv6Flag,
 			communalStorageLocationFlag, configParamFlag},
 	)
 
@@ -93,31 +97,31 @@ func (c *CmdShowRestorePoints) setLocalFlags(cmd *cobra.Command) {
 		&c.showRestorePointsOptions.FilterOptions.ArchiveName,
 		"restore-point-archive",
 		"",
-		"Archive name to filter restore points with",
+		"Filter for restore point names that include the specified string.",
 	)
 	cmd.Flags().StringVar(
 		&c.showRestorePointsOptions.FilterOptions.ArchiveID,
 		"restore-point-id",
 		"",
-		"ID to filter restore points with",
+		"Filter for restore point names that include the specified ID.",
 	)
 	cmd.Flags().StringVar(
 		&c.showRestorePointsOptions.FilterOptions.ArchiveIndex,
 		"restore-point-index",
 		"",
-		"Index to filter restore points with",
+		"Filter for restore point names that include the specified index.",
 	)
 	cmd.Flags().StringVar(
 		&c.showRestorePointsOptions.FilterOptions.StartTimestamp,
 		"start-timestamp",
 		"",
-		"Only show restores points created no earlier than this",
+		"Shows restore points after and including the specified UTC timestamp \n"+dateTimeOnly,
 	)
 	cmd.Flags().StringVar(
 		&c.showRestorePointsOptions.FilterOptions.EndTimestamp,
 		"end-timestamp",
 		"",
-		"Only show restores points created no later than this",
+		"Shows restore points up to and including the specified UTC timestamp \n"+dateTimeOnly,
 	)
 }
 
@@ -136,16 +140,27 @@ func (c *CmdShowRestorePoints) Parse(inputArgv []string, logger vlog.Printer) er
 func (c *CmdShowRestorePoints) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()")
 
-	err := c.getCertFilesFromCertPaths(&c.showRestorePointsOptions.DatabaseOptions)
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.showRestorePointsOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
+	}
+
+	err := c.ValidateParseBaseOptions(&c.showRestorePointsOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
 
-	err = c.ValidateParseBaseOptions(&c.showRestorePointsOptions.DatabaseOptions)
+	err = c.setDBPassword(&c.showRestorePointsOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
-	return c.setDBPassword(&c.showRestorePointsOptions.DatabaseOptions)
+	err = c.setConfigParam(&c.showRestorePointsOptions.DatabaseOptions)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *CmdShowRestorePoints) Analyze(logger vlog.Printer) error {
@@ -160,11 +175,16 @@ func (c *CmdShowRestorePoints) Run(vcc vclusterops.ClusterCommands) error {
 
 	restorePoints, err := vcc.VShowRestorePoints(options)
 	if err != nil {
-		vcc.LogError(err, "fail to show restore points", "DBName", options.DBName)
+		vcc.LogError(err, "failed to show restore points", "DBName", options.DBName)
 		return err
 	}
+	bytes, err := json.MarshalIndent(restorePoints, "", "  ")
+	if err != nil {
+		return err
+	}
+	c.writeCmdOutputToFile(globals.file, bytes, vcc.GetLog())
 
-	vcc.PrintInfo("Successfully show restore points %v in database %s", restorePoints, options.DBName)
+	vcc.DisplayInfo("Successfully showed restore points %v in database %s", restorePoints, options.DBName)
 	return nil
 }
 

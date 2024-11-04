@@ -45,22 +45,21 @@ func makeCmdInstallPackages() *cobra.Command {
 	cmd := makeBasicCobraCmd(
 		newCmd,
 		installPkgSubCmd,
-		"Install default package(s) in database",
-		`This subcommand installs default packages in the database.
-
-The default packages are those under /opt/vertica/packages where Autoinstall
-is marked true. Per package installation status will be returned.
+		"Installs default packages into the database.",
+		`Installs the packages in /opt/vertica/packages.
 
 Examples:
-  # Install default packages with user input.
+  # Install default packages with user input
   vcluster install_packages --db-name test_db \
-    --hosts 10.20.30.40,10.20.30.41,10.20.30.42
+    --hosts 10.20.30.40,10.20.30.41,10.20.30.42 \
+    --password "PASSWORD"
 
-  # Force (re)install default packages with config file.
+  # Force (re)install default packages with config file
   vcluster install_packages --db-name test_db --force-reinstall \
-    --config /opt/vertica/config/vertica_cluster.yaml
+    --config /opt/vertica/config/vertica_cluster.yaml \
+    --password "PASSWORD"
 `,
-		[]string{dbNameFlag, configFlag, hostsFlag, passwordFlag, outputFileFlag},
+		[]string{dbNameFlag, configFlag, hostsFlag, ipv6Flag, passwordFlag, outputFileFlag},
 	)
 
 	// local flags
@@ -75,7 +74,7 @@ func (c *CmdInstallPackages) setLocalFlags(cmd *cobra.Command) {
 		&c.installPkgOpts.ForceReinstall,
 		"force-reinstall",
 		false,
-		"Install the packages, even if they are already installed.",
+		"Install the packages even if they are already installed.",
 	)
 }
 
@@ -93,12 +92,14 @@ func (c *CmdInstallPackages) Parse(inputArgv []string, logger vlog.Printer) erro
 
 // all validations of the arguments should go in here
 func (c *CmdInstallPackages) validateParse() error {
-	err := c.getCertFilesFromCertPaths(&c.installPkgOpts.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.installPkgOpts.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 
-	err = c.ValidateParseBaseOptions(&c.installPkgOpts.DatabaseOptions)
+	err := c.ValidateParseBaseOptions(&c.installPkgOpts.DatabaseOptions)
 	if err != nil {
 		return err
 	}
@@ -114,7 +115,7 @@ func (c *CmdInstallPackages) Run(vcc vclusterops.ClusterCommands) error {
 
 	status, err := vcc.VInstallPackages(options)
 	if err != nil {
-		vcc.LogError(err, "failed to install the packages")
+		vcc.LogError(err, "failed to install packages")
 		return err
 	}
 
@@ -126,7 +127,7 @@ func (c *CmdInstallPackages) Run(vcc vclusterops.ClusterCommands) error {
 
 	c.writeCmdOutputToFile(globals.file, bytes, vcc.GetLog())
 	vcc.LogInfo("Installed the packages: ", "packages", string(bytes))
-
+	vcc.DisplayInfo("Successfully installed packages")
 	return nil
 }
 

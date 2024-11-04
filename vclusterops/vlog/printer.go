@@ -17,9 +17,13 @@ package vlog
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
+	"github.com/fatih/color"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
@@ -41,6 +45,8 @@ type Printer struct {
 	LogToFileOnly bool
 	// ForCli can indicate if vclusterops is called from vcluster cli or other clients
 	ForCli bool
+
+	Writer io.Writer
 }
 
 // WithName will construct a new printer with the logger set with an additional
@@ -50,6 +56,7 @@ func (p *Printer) WithName(logName string) Printer {
 		Log:           p.Log.WithName(logName),
 		LogToFileOnly: p.LogToFileOnly,
 		ForCli:        p.ForCli,
+		Writer:        p.Writer,
 	}
 }
 
@@ -100,6 +107,36 @@ func (p *Printer) PrintWarning(msg string, v ...any) {
 	p.printlnCond(WarningLog, fmsg)
 }
 
+// DisplayInfo will display the given message in the log. And if not logging to
+// stdout, it will repeat the message to the console.
+func (p *Printer) DisplayInfo(msg string, v ...any) {
+	fmsg := fmt.Sprintf(msg, v...)
+	fmsg = firstLetterToUpper(fmsg)
+	escapedFmsg := escapeSpecialCharacters(fmsg)
+	p.Log.Info(escapedFmsg)
+	p.println(InfoLog, fmsg)
+}
+
+// DisplayError will display the given error message in the log. And if not
+// logging to stdout, it will repeat the message to the console.
+func (p *Printer) DisplayError(msg string, v ...any) {
+	fmsg := fmt.Sprintf(msg, v...)
+	fmsg = firstLetterToLower(fmsg)
+	escapedFmsg := escapeSpecialCharacters(fmsg)
+	p.Log.Error(nil, escapedFmsg)
+	p.println(ErrorLog, fmsg)
+}
+
+// DisplayWarning will display the given warning message in the log. And if not
+// logging to stdout, it will repeat the message to the console.
+func (p *Printer) DisplayWarning(msg string, v ...any) {
+	fmsg := fmt.Sprintf(msg, v...)
+	fmsg = firstLetterToUpper(fmsg)
+	escapedFmsg := escapeSpecialCharacters(fmsg)
+	p.Log.Info(escapedFmsg)
+	p.println(WarningLog, fmsg)
+}
+
 // escapeSpecialCharacters will escape special characters (tabs or newlines) in the message.
 // Messages that are typically meant for the console could have tabs and newlines for alignment.
 // We want to escape those when writing the message to the log so that each log entry is exactly one line long.
@@ -109,6 +146,22 @@ func escapeSpecialCharacters(message string) string {
 	return message
 }
 
+func firstLetterToUpper(message string) string {
+	if message == "" {
+		return message
+	}
+	r, size := utf8.DecodeRuneInString(message)
+	return string(unicode.ToUpper(r)) + message[size:]
+}
+
+func firstLetterToLower(message string) string {
+	if message == "" {
+		return message
+	}
+	r, size := utf8.DecodeRuneInString(message)
+	return string(unicode.ToLower(r)) + message[size:]
+}
+
 // printlnCond will conditonally print a message to the console if logging to a file
 func (p *Printer) printlnCond(label, msg string) {
 	// Message is only printed if we are logging to a file only. Otherwise, it
@@ -116,6 +169,11 @@ func (p *Printer) printlnCond(label, msg string) {
 	if p.LogToFileOnly && isVerboseOutputEnabled() {
 		fmt.Printf("%s%s\n", label, msg)
 	}
+}
+
+// println will print a message to the console
+func (p *Printer) println(label, msg string) {
+	fmt.Printf("%s%s\n", label, msg)
 }
 
 // log functions for specific cases.
@@ -219,4 +277,10 @@ func (p *Printer) SetupOrDie(logFile string) {
 
 func isVerboseOutputEnabled() bool {
 	return os.Getenv("VERBOSE_OUTPUT") == "yes"
+}
+
+// DisplayColorInfo prints a colored line into console
+func DisplayColorInfo(msg string, v ...any) {
+	clr := color.New(color.FgBlue)
+	clr.Printf("\u25b6 "+msg+"\n", v...)
 }

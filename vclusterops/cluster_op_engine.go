@@ -23,19 +23,15 @@ import (
 
 type VClusterOpEngine struct {
 	instructions []clusterOp
-	certs        *httpsCerts
+	tlsOptions   opTLSOptions
 	execContext  *opEngineExecContext
 }
 
-func makeClusterOpEngine(instructions []clusterOp, certs *httpsCerts) VClusterOpEngine {
+func makeClusterOpEngine(instructions []clusterOp, tlsOptions opTLSOptions) VClusterOpEngine {
 	newClusterOpEngine := VClusterOpEngine{}
 	newClusterOpEngine.instructions = instructions
-	newClusterOpEngine.certs = certs
+	newClusterOpEngine.tlsOptions = tlsOptions
 	return newClusterOpEngine
-}
-
-func (opEngine *VClusterOpEngine) shouldGetCertsFromOptions() bool {
-	return (opEngine.certs.key != "" && opEngine.certs.cert != "")
 }
 
 func (opEngine *VClusterOpEngine) run(logger vlog.Printer) error {
@@ -46,13 +42,17 @@ func (opEngine *VClusterOpEngine) run(logger vlog.Printer) error {
 }
 
 func (opEngine *VClusterOpEngine) runWithExecContext(logger vlog.Printer, execContext *opEngineExecContext) error {
-	findCertsInOptions := opEngine.shouldGetCertsFromOptions()
-
 	for _, op := range opEngine.instructions {
-		err := opEngine.runInstruction(logger, execContext, op, findCertsInOptions)
+		err := opEngine.runInstruction(logger, execContext, op)
 		if err != nil {
 			return err
 		}
+	}
+
+	// display warning if any unreachable hosts detected
+	if len(opEngine.execContext.unreachableHosts) > 0 {
+		logger.DisplayWarning("Unreachable host(s) detected, please check the NMA connectivity in %v",
+			opEngine.execContext.unreachableHosts)
 	}
 
 	return nil
@@ -60,11 +60,13 @@ func (opEngine *VClusterOpEngine) runWithExecContext(logger vlog.Printer, execCo
 
 func (opEngine *VClusterOpEngine) runInstruction(
 	logger vlog.Printer, execContext *opEngineExecContext,
-	op clusterOp, findCertsInOptions bool) error {
+	op clusterOp) error {
 	op.setLogger(logger)
 	op.setupBasicInfo()
 	op.setupSpinner()
 	defer op.cleanupSpinner()
+
+	op.filterUnreachableHosts(execContext)
 
 	op.logPrepare()
 	err := op.prepare(execContext)
@@ -76,12 +78,12 @@ func (opEngine *VClusterOpEngine) runInstruction(
 		// start the progress spinner
 		op.startSpinner()
 
-		err = op.loadCertsIfNeeded(opEngine.certs, findCertsInOptions)
+		err = op.applyTLSOptions(opEngine.tlsOptions)
 		if err != nil {
 			// here we do not return an error as the spinner error does not
 			// affect the functionality
 			op.stopFailSpinnerWithMessage(err.Error())
-			return fmt.Errorf("loadCertsIfNeeded for %s failed, details: %w", op.getName(), err)
+			return fmt.Errorf("applying TLS options for %s failed, details: %w", op.getName(), err)
 		}
 
 		// execute an instruction
@@ -98,7 +100,7 @@ func (opEngine *VClusterOpEngine) runInstruction(
 	op.logFinalize()
 	err = op.finalize(execContext)
 	if err != nil {
-		return fmt.Errorf("finalize failed %w", err)
+		return fmt.Errorf("finalize %s failed, details: %w", op.getName(), err)
 	}
 
 	logger.PrintInfo("[%s] is successfully completed", op.getName())

@@ -43,44 +43,36 @@ func makeCmdStartReplication() *cobra.Command {
 	cmd := makeBasicCobraCmd(
 		newCmd,
 		startReplicationSubCmd,
-		"Start database replication",
-		`This subcommand starts a database replication. 
+		"Starts database replication",
+		`Replicates a table or schema from a source database to a target database. 
 		
-This subcommand copies table or schema data directly from one Eon Mode 
-database's communal storage to another.
-
-The --target-conn option serves as a collection file for gathering necessary
-target information for replication. You need to run vcluster manage_connection
-to generate this connection file in order to use this option.
-
-The --sandbox option is used to replicate from a sandbox to a target database
-or another sandbox. You must specify the hosts of the target sandbox to replicate 
-to a target sandbox. You can provide the --target-hosts option or specify the 
-target hosts in the connection file. 
-
-If the source database has EnableConnectCredentialForwarding enabled, the
-target username and password can be ignored. If the target database uses trust
-authentication, the password can be ignored.
+The options --target-db-user and --target-password-file can be omitted 
+if any one of the following conditions are met:
+  - The source database has EnableConnectCredentialForwarding enabled.
+  - The target database uses trust authentication.
 
 Examples:
   # Start database replication with config and connection file
   vcluster replication start --config /opt/vertica/config/vertica_cluster.yaml \
-    --target-conn /opt/vertica/config/target_connection.yaml 
+    --target-conn /opt/vertica/config/target_connection.yaml \
+    --password "PASSWORD"
 
   # Replicate data from a sandbox in the source database to a target database
   # specified in the connection file.
   vcluster replication start --config /opt/vertica/config/vertica_cluster.yaml \
-    --target-conn /opt/vertica/config/target_connection.yaml --sandbox sand
+    --target-conn /opt/vertica/config/target_connection.yaml --sandbox sand \
+    --password "PASSWORD"
 
   # Start database replication with user input and connection file
   vcluster replication start --db-name test_db --hosts 10.20.30.40 \
-    --target-conn /opt/vertica/config/target_connection.yaml 
+    --target-conn /opt/vertica/config/target_connection.yaml \
+    --password "PASSWORD"
 
   # Start database replication with config and connection file
   # tls option and tls-based authentication
   vcluster replication start --config /opt/vertica/config/vertica_cluster.yaml \ 
     --key-file /path/to/key-file --cert-file /path/to/cert-file \
-    --target-conn /opt/vertica/config/target_connection.yaml --source-tlsconfig test_tlsconfig
+    --target-conn /opt/vertica/config/target_connection.yaml --source-tlsconfig test_tlsconfig 
   
   # Start database replication with user input
   # option and password-based authentication 
@@ -94,59 +86,85 @@ Examples:
 	// local flags
 	newCmd.setLocalFlags(cmd)
 
-	// either target dbname/hosts or connection file must be provided
+	// either target dbname+hosts or connection file must be provided
 	cmd.MarkFlagsOneRequired(targetConnFlag, targetDBNameFlag)
 	cmd.MarkFlagsOneRequired(targetConnFlag, targetHostsFlag)
 
+	// tableOrSchema or pattern can not be accepted together
+	cmd.MarkFlagsMutuallyExclusive(tableOrSchemaNameFlag, includePatternFlag)
+	cmd.MarkFlagsMutuallyExclusive(tableOrSchemaNameFlag, excludePatternFlag)
+
 	// hide eon mode flag since we expect it to come from config file, not from user input
-	hideLocalFlags(cmd, []string{eonModeFlag})
+	hideLocalFlags(cmd, []string{eonModeFlag, asyncFlag, tableOrSchemaNameFlag,
+		includePatternFlag, excludePatternFlag, targetNamespaceFlag})
 	return cmd
 }
 
 // setLocalFlags will set the local flags the command has
 func (c *CmdStartReplication) setLocalFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(
-		&c.startRepOptions.TargetDB,
+		&c.startRepOptions.TargetDB.DBName,
 		targetDBNameFlag,
 		"",
-		"The target database that we will replicate to",
+		"The target database to replicate to.",
 	)
 	cmd.Flags().StringVar(
-		&c.startRepOptions.Sandbox,
+		&c.startRepOptions.SandboxName,
 		sandboxFlag,
 		"",
-		"The source sandbox that we will replicate from",
-	)
-	cmd.Flags().StringSliceVar(
-		&c.startRepOptions.TargetHosts,
-		targetHostsFlag,
-		[]string{},
-		"Comma-separated list of hosts in target database")
-	cmd.Flags().StringVar(
-		&c.startRepOptions.TargetUserName,
-		targetUserNameFlag,
-		"",
-		"The username for connecting to the target database",
+		"The source sandbox to replicate from.",
 	)
 	cmd.Flags().StringVar(
 		&c.startRepOptions.SourceTLSConfig,
 		sourceTLSConfigFlag,
 		"",
-		"The TLS configuration to use when connecting to the target database "+
-			", must exist in the source database",
+		"The TLS configuration to use when connecting to the target database.\n "+
+			"This TLS configuration must also exist in the source database.",
+	)
+	cmd.Flags().BoolVar(
+		&c.startRepOptions.Async,
+		asyncFlag,
+		false,
+		"If set to true, will run the replicate operation asynchronously. "+
+			"Default value is false.",
 	)
 	cmd.Flags().StringVar(
-		&globals.connFile,
-		targetConnFlag,
+		&c.startRepOptions.TableOrSchemaName,
+		tableOrSchemaNameFlag,
 		"",
-		"Path to the connection file")
-	markFlagsFileName(cmd, map[string][]string{targetConnFlag: {"yaml"}})
-	//  password flags
+		"(only async replication)The object name we want to copy from the source side. The available"+
+			" types are: namespace, schema, table. If this is omitted, the operator"+
+			" will replicate all namespaces in the source database.",
+	)
 	cmd.Flags().StringVar(
-		&c.targetPasswordFile,
-		targetPasswordFileFlag,
+		&c.startRepOptions.IncludePattern,
+		includePatternFlag,
 		"",
-		"Path to the file to read the password for target database. ",
+		"(only async replication)A string containing a wildcard pattern of the schemas and/or tables to"+
+			"include in the replication. Namespace names must be front-qualified "+
+			"with a period.",
+	)
+	cmd.Flags().StringVar(
+		&c.startRepOptions.ExcludePattern,
+		excludePatternFlag,
+		"",
+		"(only async replication)A string containing a wildcard pattern of the schemas and/or tables"+
+			" to exclude from the set of tables matched by the include pattern. "+
+			"Namespace names must be front-qualified with a period.",
+	)
+	cmd.Flags().StringVar(
+		&c.startRepOptions.TargetNamespace,
+		targetNamespaceFlag,
+		"",
+		"(only async replication)Namespace in the target database to which objects are replicated."+
+			" The target namespace must have the same shard count as the source "+
+			"namespace in the source cluster."+
+			"If you do not specify a target namespace, objects are replicated to"+
+			" a namespace with the same name as the source namespace. If no such"+
+			" namespace exists in the target cluster, it is created with the same"+
+			" name and shard count as the source namespace. You can only replicate"+
+			" tables in the public schema to the default_namespace in the target"+
+			" cluster.",
 	)
 }
 
@@ -171,16 +189,28 @@ func (c *CmdStartReplication) Parse(inputArgv []string, logger vlog.Printer) err
 // all validations of the arguments should go in here
 func (c *CmdStartReplication) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()")
-	err := c.getCertFilesFromCertPaths(&c.startRepOptions.DatabaseOptions)
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.startRepOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
+	}
+	err := c.getTargetCertFilesFromCertPaths(&c.startRepOptions.TargetDB)
 	if err != nil {
 		return err
 	}
+
 	err = c.parseTargetHostList()
 	if err != nil {
 		return err
 	}
 
 	err = c.parseTargetPassword()
+	if err != nil {
+		return err
+	}
+
+	err = c.ValidateParseBaseTargetOptions(&c.startRepOptions.TargetDB)
 	if err != nil {
 		return err
 	}
@@ -194,10 +224,10 @@ func (c *CmdStartReplication) validateParse(logger vlog.Printer) error {
 }
 
 func (c *CmdStartReplication) parseTargetHostList() error {
-	if len(c.startRepOptions.TargetHosts) > 0 {
-		err := util.ParseHostList(&c.startRepOptions.TargetHosts)
+	if len(c.startRepOptions.TargetDB.Hosts) > 0 {
+		err := util.ParseHostList(&c.startRepOptions.TargetDB.Hosts)
 		if err != nil {
-			return fmt.Errorf("must specify at least one target host to replicate")
+			return fmt.Errorf("you must specify at least one target host to replicate to")
 		}
 	}
 	return nil
@@ -207,18 +237,21 @@ func (c *CmdStartReplication) parseTargetPassword() error {
 	options := c.startRepOptions
 	if !viper.IsSet(targetPasswordFileKey) {
 		// reset password option to nil if password is not provided in cli
-		options.TargetPassword = nil
+		options.TargetDB.Password = nil
 		return nil
 	}
-	if c.startRepOptions.TargetPassword == nil {
-		options.TargetPassword = new(string)
+	if c.startRepOptions.TargetDB.Password == nil {
+		options.TargetDB.Password = new(string)
 	}
 
+	if c.targetPasswordFile == "" {
+		return fmt.Errorf("target password file path is empty")
+	}
 	password, err := c.passwordFileHelper(c.targetPasswordFile)
 	if err != nil {
 		return err
 	}
-	*options.TargetPassword = password
+	*options.TargetDB.Password = password
 	return nil
 }
 
@@ -227,20 +260,27 @@ func (c *CmdStartReplication) Run(vcc vclusterops.ClusterCommands) error {
 
 	options := c.startRepOptions
 
-	err := vcc.VReplicateDatabase(options)
+	transactionID, err := vcc.VReplicateDatabase(options)
 	if err != nil {
-		vcc.LogError(err, "fail to replicate to database", "targetDB", options.TargetDB)
+		vcc.LogError(err, "failed to replicate to database", "targetDB", options.TargetDB.DBName)
 		return err
 	}
-	vcc.PrintInfo("Successfully replicate to database %s", options.TargetDB)
+
+	if options.Async {
+		vcc.DisplayInfo("Successfully started replication to database %s. Transaction ID: %d", options.TargetDB.DBName, transactionID)
+	} else {
+		vcc.DisplayInfo("Successfully replicated to database %s", options.TargetDB.DBName)
+	}
+
 	return nil
 }
 
 // SetDatabaseOptions will assign a vclusterops.DatabaseOptions instance
 func (c *CmdStartReplication) SetDatabaseOptions(opt *vclusterops.DatabaseOptions) {
 	c.startRepOptions.DatabaseOptions = *opt
-	c.startRepOptions.TargetUserName = globals.targetUserName
-	c.startRepOptions.TargetDB = globals.targetDB
-	c.startRepOptions.TargetHosts = globals.targetHosts
+	c.startRepOptions.TargetDB.UserName = globals.targetUserName
+	c.startRepOptions.TargetDB.DBName = globals.targetDB
+	c.startRepOptions.TargetDB.Hosts = globals.targetHosts
+	c.startRepOptions.TargetDB.IPv6 = globals.targetIPv6
 	c.targetPasswordFile = globals.targetPasswordFile
 }

@@ -26,30 +26,30 @@ import (
 type httpsStartReplicationOp struct {
 	opBase
 	opHTTPSBase
+	TargetDB           DatabaseOptions
 	hostRequestBodyMap map[string]string
 	sourceDB           string
-	targetHosts        string
-	targetDB           string
+	targetHost         string
 	sandbox            string
-	targetUserName     string
-	targetPassword     *string
 	tlsConfig          string
+	vdb                *VCoordinationDatabase
 }
 
 func makeHTTPSStartReplicationOp(dbName string, sourceHosts []string,
 	sourceUseHTTPPassword bool, sourceUserName string,
-	sourceHTTPPassword *string, targetUseHTTPPassword bool, targetDB, targetUserName, targetHosts string,
-	targetHTTPSPassword *string, tlsConfig, sandbox string) (httpsStartReplicationOp, error) {
+	sourceHTTPPassword *string, targetUseHTTPPassword bool, targetDBOpt *DatabaseOptions,
+	targetHost string, tlsConfig, sandbox string, vdb *VCoordinationDatabase) (httpsStartReplicationOp, error) {
 	op := httpsStartReplicationOp{}
 	op.name = "HTTPSStartReplicationOp"
 	op.description = "Start database replication"
 	op.sourceDB = dbName
 	op.hosts = sourceHosts
 	op.useHTTPPassword = sourceUseHTTPPassword
-	op.targetDB = targetDB
-	op.targetHosts = targetHosts
+	op.TargetDB.DBName = targetDBOpt.DBName
+	op.targetHost = targetHost
 	op.tlsConfig = tlsConfig
 	op.sandbox = sandbox
+	op.vdb = vdb
 
 	if sourceUseHTTPPassword {
 		err := util.ValidateUsernameAndPassword(op.name, sourceUseHTTPPassword, sourceUserName)
@@ -60,12 +60,12 @@ func makeHTTPSStartReplicationOp(dbName string, sourceHosts []string,
 		op.httpsPassword = sourceHTTPPassword
 	}
 	if targetUseHTTPPassword {
-		err := util.ValidateUsernameAndPassword(op.name, targetUseHTTPPassword, targetUserName)
+		err := util.ValidateUsernameAndPassword(op.name, targetUseHTTPPassword, targetDBOpt.UserName)
 		if err != nil {
 			return op, err
 		}
-		op.targetUserName = targetUserName
-		op.targetPassword = targetHTTPSPassword
+		op.TargetDB.UserName = targetDBOpt.UserName
+		op.TargetDB.Password = targetDBOpt.Password
 	}
 
 	return op, nil
@@ -84,10 +84,10 @@ func (op *httpsStartReplicationOp) setupRequestBody(hosts []string) error {
 
 	for _, host := range hosts {
 		replicateData := replicateRequestData{}
-		replicateData.TargetHost = op.targetHosts
-		replicateData.TargetDB = op.targetDB
-		replicateData.TargetUserName = op.targetUserName
-		replicateData.TargetPassword = op.targetPassword
+		replicateData.TargetHost = op.targetHost
+		replicateData.TargetDB = op.TargetDB.DBName
+		replicateData.TargetUserName = op.TargetDB.UserName
+		replicateData.TargetPassword = op.TargetDB.Password
 		replicateData.TLSConfig = op.tlsConfig
 
 		dataBytes, err := json.Marshal(replicateData)
@@ -117,29 +117,14 @@ func (op *httpsStartReplicationOp) setupClusterHTTPRequest(hosts []string) error
 }
 
 func (op *httpsStartReplicationOp) prepare(execContext *opEngineExecContext) error {
-	if len(execContext.nodesInfo) == 0 {
-		return fmt.Errorf(`[%s] cannot find any hosts in OpEngineExecContext`, op.name)
+	sourceHost, err := getInitiatorHostForReplication(op.name, op.sandbox, op.hosts, op.vdb)
+	if err != nil {
+		return err
 	}
-	// source hosts will be :
-	// 1. up hosts from the main subcluster if the sandbox is empty
-	// 2. up hosts from the sandbox if the sandbox is specified
-	var sourceHosts []string
-	for _, node := range execContext.nodesInfo {
-		if node.State != util.NodeDownState && node.Sandbox == op.sandbox {
-			sourceHosts = append(sourceHosts, node.Address)
-		}
-	}
-	sourceHosts = util.SliceCommon(op.hosts, sourceHosts)
-	if len(sourceHosts) == 0 {
-		if op.sandbox == "" {
-			return fmt.Errorf("[%s] cannot find any up hosts from source database %s", op.name, op.sourceDB)
-		}
-		return fmt.Errorf("[%s] cannot find any up hosts in the sandbox %s", op.name, op.sandbox)
-	}
+	// use first up host to execute https post request
+	op.hosts = sourceHost
 
-	op.hosts = []string{sourceHosts[0]}
-
-	err := op.setupRequestBody(op.hosts)
+	err = op.setupRequestBody(op.hosts)
 	if err != nil {
 		return err
 	}

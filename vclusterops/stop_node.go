@@ -28,52 +28,68 @@ type VStopNodeOptions struct {
 	DatabaseOptions
 	// Hosts to stop
 	StopHosts []string
+	// timeout for polling nodes that we want to wait in httpsPollNodeStopeOp
+	StopPollingTimeout int
 }
 
 func VStopNodeOptionsFactory() VStopNodeOptions {
-	opt := VStopNodeOptions{}
+	options := VStopNodeOptions{}
 	// set default values to the params
-	opt.setDefaultValues()
+	options.setDefaultValues()
 
-	return opt
+	return options
 }
 
-func (o *VStopNodeOptions) setDefaultValues() {
-	o.DatabaseOptions.setDefaultValues()
+func (options *VStopNodeOptions) setDefaultValues() {
+	options.DatabaseOptions.setDefaultValues()
+	// set time out from env variable
+	options.StopPollingTimeout = util.GetEnvInt("NODE_STATE_POLLING_TIMEOUT", util.DefaultStatePollingTimeout)
 }
 
-func (o *VStopNodeOptions) validateParseOptions(logger vlog.Printer) error {
-	// validate required parameters
-	return o.validateBaseOptions("stop_node", logger)
+func (options *VStopNodeOptions) validateRequiredOptions(logger vlog.Printer) error {
+	err := options.validateBaseOptions(StopNodeCmd, logger)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (options *VStopNodeOptions) validateParseOptions(logger vlog.Printer) error {
+	// batch 1: validate required parameters
+	err := options.validateRequiredOptions(logger)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // analyzeOptions will modify some options based on what is chosen
-func (o *VStopNodeOptions) analyzeOptions() (err error) {
-	o.StopHosts, err = util.ResolveRawHostsToAddresses(o.StopHosts, o.IPv6)
+func (options *VStopNodeOptions) analyzeOptions() (err error) {
+	options.StopHosts, err = util.ResolveRawHostsToAddresses(options.StopHosts, options.IPv6)
 	if err != nil {
 		return err
 	}
 
 	// we analyze host names when it is set in user input, otherwise we use hosts in yaml config
 	// resolve RawHosts to be IP addresses
-	if len(o.RawHosts) > 0 {
-		o.Hosts, err = util.ResolveRawHostsToAddresses(o.RawHosts, o.IPv6)
+	if len(options.RawHosts) > 0 {
+		options.Hosts, err = util.ResolveRawHostsToAddresses(options.RawHosts, options.IPv6)
 		if err != nil {
 			return err
 		}
-		o.normalizePaths()
+		options.normalizePaths()
 	}
 
 	return nil
 }
 
-func (o *VStopNodeOptions) validateAnalyzeOptions(logger vlog.Printer) error {
-	err := o.validateParseOptions(logger)
+func (options *VStopNodeOptions) validateAnalyzeOptions(logger vlog.Printer) error {
+	err := options.validateParseOptions(logger)
 	if err != nil {
 		return err
 	}
 
-	return o.analyzeOptions()
+	return options.analyzeOptions()
 }
 
 // VStopNode stops a host in an existing database.
@@ -105,8 +121,7 @@ func (vcc VClusterCommands) VStopNode(options *VStopNodeOptions) error {
 		return fmt.Errorf("fail to produce stop node instructions, %w", err)
 	}
 
-	certs := httpsCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+	clusterOpEngine := makeClusterOpEngine(instructions, options)
 	if runError := clusterOpEngine.run(vcc.Log); runError != nil {
 		return fmt.Errorf("fail to complete stop node operation, %w", runError)
 	}
@@ -126,7 +141,7 @@ func checkStopNodeRequirements(vdb *VCoordinationDatabase, hostsToStop []string)
 
 // completeVDBSetting sets some VCoordinationDatabase fields we cannot get yet
 // from the https endpoints. We set those fields from options.
-func (o *VStopNodeOptions) completeVDBSetting(vdb *VCoordinationDatabase) {
+func (options *VStopNodeOptions) completeVDBSetting(vdb *VCoordinationDatabase) {
 	hostNodeMap := makeVHostNodeMap()
 	for h, vnode := range vdb.HostNodeMap {
 		hostNodeMap[h] = vnode

@@ -29,11 +29,16 @@ type httpsSandboxingOp struct {
 	hostRequestBodyMap map[string]string
 	scName             string
 	sandboxName        string
+	SaveRp             bool
+	Imeta              bool
+	Sls                bool
+	ForUpgrade         bool
+	sbHosts            *[]string
 }
 
 // This op is used to sandbox the given subcluster `scName` as `sandboxName`
-func makeHTTPSandboxingOp(logger vlog.Printer, scName, sandboxName string,
-	useHTTPPassword bool, userName string, httpsPassword *string) (httpsSandboxingOp, error) {
+func makeHTTPSandboxingOp(logger vlog.Printer, scName, sandboxName string, useHTTPPassword bool,
+	userName string, httpsPassword *string, saveRp, imeta, sls, forUpgrade bool, hosts *[]string) (httpsSandboxingOp, error) {
 	op := httpsSandboxingOp{}
 	op.name = "HTTPSSansboxingOp"
 	op.description = "Convert subcluster into sandbox in catalog system"
@@ -41,6 +46,11 @@ func makeHTTPSandboxingOp(logger vlog.Printer, scName, sandboxName string,
 	op.useHTTPPassword = useHTTPPassword
 	op.scName = scName
 	op.sandboxName = sandboxName
+	op.SaveRp = saveRp
+	op.Imeta = imeta
+	op.Sls = sls
+	op.ForUpgrade = forUpgrade
+	op.sbHosts = hosts
 
 	if useHTTPPassword {
 		err := util.ValidateUsernameAndPassword(op.name, useHTTPPassword, userName)
@@ -59,7 +69,7 @@ func (op *httpsSandboxingOp) setupClusterHTTPRequest(hosts []string) error {
 	for _, host := range hosts {
 		httpRequest := hostHTTPRequest{}
 		httpRequest.Method = PostMethod
-		httpRequest.buildHTTPSEndpoint("subclusters/" + op.scName + "/sandbox")
+		httpRequest.buildHTTPSEndpoint(util.SubclustersEndpoint + op.scName + "/sandbox")
 		if op.useHTTPPassword {
 			httpRequest.Password = op.httpsPassword
 			httpRequest.Username = op.userName
@@ -74,7 +84,10 @@ func (op *httpsSandboxingOp) setupClusterHTTPRequest(hosts []string) error {
 func (op *httpsSandboxingOp) setupRequestBody() error {
 	op.hostRequestBodyMap = make(map[string]string)
 	op.hostRequestBodyMap["sandbox"] = op.sandboxName
-
+	op.hostRequestBodyMap["save-restore-point"] = util.BoolToStr(op.SaveRp)
+	op.hostRequestBodyMap["create-storage-locations"] = util.BoolToStr(op.Sls)
+	op.hostRequestBodyMap["isolate-metadata"] = util.BoolToStr(op.Imeta)
+	op.hostRequestBodyMap["for-upgrade"] = util.BoolToStr(op.ForUpgrade)
 	return nil
 }
 
@@ -144,6 +157,9 @@ func (op *httpsSandboxingOp) processResult(_ *opEngineExecContext) error {
 	return allErrs
 }
 
-func (op *httpsSandboxingOp) finalize(_ *opEngineExecContext) error {
+func (op *httpsSandboxingOp) finalize(execContext *opEngineExecContext) error {
+	for _, vnode := range execContext.scNodesInfo {
+		*op.sbHosts = append(*op.sbHosts, vnode.Address)
+	}
 	return nil
 }

@@ -43,28 +43,8 @@ func makeCmdCreateDB() *cobra.Command {
 	cmd := makeBasicCobraCmd(
 		newCmd,
 		createDBSubCmd,
-		"Create a database",
-		`This subcommand creates a database on a set of hosts.
-
-You must specify the database name, host list, catalog path, and data path.
-
-If --config is not provided, a configuration file is created in one of the
-following locations, in order of precedence:
-- path set in VCLUSTER_CONFIG environment variable
-- /opt/vertica/config/vertica_config.yaml if running vcluster from /opt/vertica/bin
-- $HOME/.config/vcluster/vertica_config.yaml
-
-You can pass --config-param a comma-separated list of NAME=VALUE pairs to set
-multiple configuration parameters when the database is created
-(see Example below).
-
-To remove the local directories like catalog, depot, and data, you can use the
---force-cleanup-on-failure or --force-removal-at-creation options.
-The data deleted with these options is unrecoverable.
-
-The password for the dbadmin user of this new database can be provided in a few ways. 
-It can be read from a file using --password-file, prompted by the CLI with 
---read-password-from-prompt, or passed as plain text with --password as an option.
+		"Creates a database",
+		`Creates a new database and its associated configuration file for use with other vcluster commands.
 
 Examples:
   # Create a database and save the generated config file under custom directory
@@ -72,7 +52,8 @@ Examples:
     --hosts 10.20.30.40,10.20.30.41,10.20.30.42 \
     --catalog-path /data --data-path /data \
     --config-param HttpServerConf=/opt/vertica/config/https_certs/httpstls.json \
-    --config $HOME/custom/directory/vertica_cluster.yaml
+    --config $HOME/custom/directory/vertica_cluster.yaml \
+    --password "PASSWORD"
 
   # Read the password from file
   vcluster create_db --db-name test_db \
@@ -96,7 +77,7 @@ Examples:
   vcluster create_db --db-name test_db \
     --hosts 10.20.30.40,10.20.30.41,10.20.30.42 \
     --catalog-path /data --data-path /data \
-    --password 12345678
+    --password "PASSWORD"
 `,
 		[]string{dbNameFlag, hostsFlag, catalogPathFlag, dataPathFlag, depotPathFlag,
 			communalStorageLocationFlag, passwordFlag, configFlag, ipv6Flag, configParamFlag},
@@ -109,11 +90,7 @@ Examples:
 	newCmd.setHiddenFlags(cmd)
 
 	// require db-name
-	markFlagsRequired(cmd, []string{dbNameFlag})
-
-	// VER-92676: we may add a function setRequiredFlags() in cmd_base.go
-	// in which we can set catalog-path, data-path, ...
-	// then call that function in cmd_create_db and cmd_revive_db
+	markFlagsRequired(cmd, dbNameFlag, hostsFlag, catalogPathFlag, dataPathFlag)
 
 	return cmd
 }
@@ -124,92 +101,110 @@ func (c *CmdCreateDB) setLocalFlags(cmd *cobra.Command) {
 		&c.createDBOptions.LicensePathOnNode,
 		"license",
 		"",
-		"Database license",
+		"The absolute path to a license file.",
 	)
 	cmd.Flags().StringVar(
 		&c.createDBOptions.Policy,
 		"policy",
 		util.DefaultRestartPolicy,
-		"Restart policy of the database",
+		"The restart policy of the database.",
 	)
 	cmd.Flags().StringVar(
 		&c.createDBOptions.SQLFile,
 		"sql",
 		"",
-		"SQL file to run (as dbadmin) immediately on database creation",
+		"The SQL file to run (as dbadmin) after database creation.",
 	)
 	markFlagsFileName(cmd, map[string][]string{"sql": {"sql"}})
 	cmd.Flags().IntVar(
 		&c.createDBOptions.ShardCount,
 		"shard-count",
 		0,
-		util.GetEonFlagMsg("Number of shards in the database"),
+		util.GetEonFlagMsg("The number of shards in the database."),
 	)
 	cmd.Flags().StringVar(
 		&c.createDBOptions.DepotSize,
 		"depot-size",
 		"",
-		util.GetEonFlagMsg("Size of depot"),
+		util.GetEonFlagMsg(util.DepotFmtMsg+util.DepotSizeKMGTMsg+util.DepotSizeHint),
 	)
 	cmd.Flags().BoolVar(
 		&c.createDBOptions.GetAwsCredentialsFromEnv,
 		"get-aws-credentials-from-env-vars",
 		false,
-		util.GetEonFlagMsg("Read AWS credentials from environment variables"),
-	)
-	cmd.Flags().BoolVar(
-		&c.createDBOptions.P2p,
-		"point-to-point",
-		true,
-		"Configure Spread to use point-to-point communication between all Vertica nodes",
-	)
-	cmd.Flags().BoolVar(
-		&c.createDBOptions.Broadcast,
-		"broadcast",
-		false,
-		"Configure Spread to use UDP broadcast traffic between nodes on the same subnet",
+		util.GetEonFlagMsg("Retrieves AWS credentials from the following environment variables: $AWS_ACCESS_KEY_ID, $AWS_SECRET_ACCESS_KEY"),
 	)
 	cmd.Flags().IntVar(
 		&c.createDBOptions.LargeCluster,
 		"large-cluster",
 		-1,
-		"Enables a large cluster layout",
-	)
-	cmd.Flags().BoolVar(
-		&c.createDBOptions.SpreadLogging,
-		"spread-logging",
-		false,
-		"Whether enable spread logging",
-	)
-	cmd.Flags().IntVar(
-		&c.createDBOptions.SpreadLoggingLevel,
-		"spread-logging-level",
-		-1,
-		"Spread logging level",
+		"Enables the large cluster layout and sets the number of control nodes (default: -1, disabled).\n"+
+			"The effect of this option is slightly different on Enterprise and Eon databases. For details, see the Vertica documentation.",
 	)
 	cmd.Flags().BoolVar(
 		&c.createDBOptions.ForceCleanupOnFailure,
 		"force-cleanup-on-failure",
 		false,
-		"Force removal of existing directories on failure of command",
+		"Deletes directories created by create_db upon failure.",
 	)
 	cmd.Flags().BoolVar(
 		&c.createDBOptions.ForceRemovalAtCreation,
 		"force-removal-at-creation",
 		false,
-		"Force removal of existing directories before creating the database",
+		"Deletes existing database directories before attempting to create the database.",
+	)
+	cmd.Flags().BoolVar(
+		&c.createDBOptions.ForceOverwriteFile,
+		"force-overwrite-file",
+		false,
+		"Overwrites the current configuration file, if any.",
 	)
 	cmd.Flags().BoolVar(
 		&c.createDBOptions.SkipPackageInstall,
 		"skip-package-install",
 		false,
-		"Skip the installation of packages from /opt/vertica/packages.",
+		"Skips installing the packages in /opt/vertica/packages.",
 	)
 	cmd.Flags().IntVar(
 		&c.createDBOptions.TimeoutNodeStartupSeconds,
 		"startup-timeout",
-		util.DefaultTimeoutSeconds,
-		"The timeout to wait for the nodes to start",
+		util.GetEnvInt("NODE_STATE_POLLING_TIMEOUT", util.DefaultTimeoutSeconds),
+		"The time, in seconds, to wait for the nodes to start after database creation (default: 300).",
+	)
+	c.setSpreadlFlags(cmd)
+}
+
+func (c *CmdCreateDB) setSpreadlFlags(cmd *cobra.Command) {
+	cmd.Flags().BoolVar(
+		&c.createDBOptions.SpreadLogging,
+		"spread-logging",
+		false,
+		"Whether enable Spread logging.",
+	)
+	cmd.Flags().IntVar(
+		&c.createDBOptions.SpreadLoggingLevel,
+		"spread-logging-level",
+		-1,
+		"The Spread logging level.",
+	)
+	cmd.Flags().BoolVar(
+		&c.createDBOptions.P2p,
+		"point-to-point",
+		true,
+		"Configures Spread to use point-to-point communication between all Vertica nodes (default: enabled).\n"+
+			"You should use this option if your nodes are not on the same subnet and for virtual environments.\n"+
+			"Do not combine this option with --broadcast.\n"+
+			"Up to 80 Spread daemons are supported by point-to-point communication. You can exceed the 80-node limit by using large cluster mode,\n"+
+			"which only installs the Spread daemon on a subset of your nodes.",
+	)
+	cmd.Flags().BoolVar(
+		&c.createDBOptions.Broadcast,
+		"broadcast",
+		false,
+		"Configures Spread to use UDP broadcast traffic between nodes on the same subnet (default: disabled).\n"+
+			"Do not combine this option with `--point-to-point`.\n"+
+			"Up to 80 Spread daemons are supported by broadcast traffic. You can exceed the 80-node limit by using large cluster mode,\n"+
+			"which does not install a Spread daemon on each node.",
 	)
 }
 
@@ -228,7 +223,13 @@ func (c *CmdCreateDB) setHiddenFlags(cmd *cobra.Command) {
 		false,
 		"",
 	)
-	hideLocalFlags(cmd, []string{"policy", "sql", "client-port", "skip-startup-polling"})
+	cmd.Flags().BoolVar(
+		&c.createDBOptions.GenerateHTTPCerts,
+		"generate-http-certs",
+		false,
+		"",
+	)
+	hideLocalFlags(cmd, []string{"policy", "sql", "client-port", "skip-startup-polling", "generate-http-certs"})
 }
 
 func (c *CmdCreateDB) Parse(inputArgv []string, logger vlog.Printer) error {
@@ -252,12 +253,23 @@ func (c *CmdCreateDB) validateParse(logger vlog.Printer) error {
 		return err
 	}
 
+	// for creating a database, db password is mandatory input
+	// we need to read certs for connecting to node management agent
 	err = c.getCertFilesFromCertPaths(&c.createDBOptions.DatabaseOptions)
 	if err != nil {
 		return err
 	}
 
-	return c.setDBPassword(&c.createDBOptions.DatabaseOptions)
+	err = c.setDBPassword(&c.createDBOptions.DatabaseOptions)
+	if err != nil {
+		return err
+	}
+
+	err = c.initConfigParam()
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *CmdCreateDB) Run(vcc vclusterops.ClusterCommands) error {
@@ -267,12 +279,18 @@ func (c *CmdCreateDB) Run(vcc vclusterops.ClusterCommands) error {
 		return createError
 	}
 
+	vcc.DisplayInfo("Successfully created a database with name [%s]", vdb.Name)
+
 	// write db info to vcluster config file
-	err := writeConfig(&vdb, vcc.GetLog())
+	err := writeConfig(&vdb, c.createDBOptions.ForceOverwriteFile)
 	if err != nil {
-		vcc.PrintWarning("fail to write config file, details: %s", err)
+		vcc.DisplayWarning("Failed to write the configuration file: %s\n", err)
 	}
-	vcc.PrintInfo("Created a database with name [%s]", vdb.Name)
+	// write config parameters to vcluster config param file
+	err = c.writeConfigParam(c.createDBOptions.ConfigurationParameters, c.createDBOptions.ForceOverwriteFile)
+	if err != nil {
+		vcc.DisplayWarning("Failed to write configuration parameter file: %s", err)
+	}
 	return nil
 }
 

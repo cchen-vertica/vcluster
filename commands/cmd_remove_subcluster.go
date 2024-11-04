@@ -41,32 +41,29 @@ func makeCmdRemoveSubcluster() *cobra.Command {
 	cmd := makeBasicCobraCmd(
 		newCmd,
 		removeSCSubCmd,
-		"Remove a subcluster",
-		`This subcommand removes a subcluster from an existing Eon Mode database.
-
-You must provide the subcluster name with the --subcluster option.
-
-All hosts in the subcluster are removed. You cannot remove a sandboxed
-subcluster.
+		"Removes a subcluster.",
+		`Removes a non-sandboxed subcluster and its nodes from an Eon Mode database.
 
 Examples:
   # Remove a subcluster with config file
-  vcluster db_remove_subcluster --subcluster sc1 \
-    --config /opt/vertica/config/vertica_cluster.yaml
+  vcluster remove_subcluster --subcluster sc1 \
+    --config /opt/vertica/config/vertica_cluster.yaml \
+    --password "PASSWORD"
 
   # Remove a subcluster with user input
-  vcluster db_remove_subcluster --db-name test_db \
+  vcluster remove_subcluster --db-name test_db \
     --hosts 10.20.30.40,10.20.30.41,10.20.30.42 --subcluster sc1 \
-    --data-path /data --depot-path /data
+    --data-path /data --depot-path /data \
+    --password "PASSWORD"
 `,
-		[]string{dbNameFlag, configFlag, hostsFlag, eonModeFlag, dataPathFlag, depotPathFlag, passwordFlag},
+		[]string{dbNameFlag, configFlag, hostsFlag, ipv6Flag, eonModeFlag, dataPathFlag, depotPathFlag, passwordFlag},
 	)
 
 	// local flags
 	newCmd.setLocalFlags(cmd)
 
 	// require name of subcluster to remove
-	markFlagsRequired(cmd, []string{subclusterFlag})
+	markFlagsRequired(cmd, subclusterFlag)
 
 	// hide eon mode flag since we expect it to come from config file, not from user input
 	hideLocalFlags(cmd, []string{eonModeFlag})
@@ -77,16 +74,10 @@ Examples:
 // setLocalFlags will set the local flags the command has
 func (c *CmdRemoveSubcluster) setLocalFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(
-		&c.removeScOptions.SubclusterToRemove,
+		&c.removeScOptions.SCName,
 		subclusterFlag,
 		"",
-		"Name of subcluster to be removed",
-	)
-	cmd.Flags().BoolVar(
-		&c.removeScOptions.ForceDelete,
-		"force-delete",
-		true,
-		"Whether force delete directories if they are not empty",
+		"Name of subcluster to remove.",
 	)
 }
 
@@ -107,12 +98,14 @@ func (c *CmdRemoveSubcluster) Parse(inputArgv []string, logger vlog.Printer) err
 
 func (c *CmdRemoveSubcluster) validateParse(logger vlog.Printer) error {
 	logger.Info("Called validateParse()")
-	err := c.getCertFilesFromCertPaths(&c.removeScOptions.DatabaseOptions)
-	if err != nil {
-		return err
+	if !c.usePassword() {
+		err := c.getCertFilesFromCertPaths(&c.removeScOptions.DatabaseOptions)
+		if err != nil {
+			return err
+		}
 	}
 
-	err = c.ValidateParseBaseOptions(&c.removeScOptions.DatabaseOptions)
+	err := c.ValidateParseBaseOptions(&c.removeScOptions.DatabaseOptions)
 	if err != nil {
 		return nil
 	}
@@ -130,16 +123,18 @@ func (c *CmdRemoveSubcluster) Run(vcc vclusterops.ClusterCommands) error {
 
 	vdb, err := vcc.VRemoveSubcluster(options)
 	if err != nil {
+		vcc.LogError(err, "failed to remove subcluster.")
 		return err
 	}
 
+	vcc.DisplayInfo("Successfully removed subcluster %s from database %s",
+		options.SCName, options.DBName)
+
 	// write db info to vcluster config file
-	err = writeConfig(&vdb, vcc.GetLog())
+	err = writeConfig(&vdb, true /*forceOverwrite*/)
 	if err != nil {
-		vcc.PrintWarning("fail to write config file, details: %s", err)
+		vcc.DisplayWarning("Failed to write the configuration file: %s", err)
 	}
-	vcc.PrintInfo("Successfully removed subcluster %s from database %s",
-		options.SubclusterToRemove, options.DBName)
 
 	return nil
 }

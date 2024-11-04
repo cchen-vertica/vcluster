@@ -36,15 +36,15 @@ const (
 // produceTransferConfigOps generates instructions to transfert some config
 // files from a sourceConfig node to target nodes.
 func produceTransferConfigOps(instructions *[]clusterOp, sourceConfigHost,
-	targetHosts []string, vdb *VCoordinationDatabase) {
+	targetHosts []string, vdb *VCoordinationDatabase, sandbox *string) {
 	var verticaConfContent string
 	nmaDownloadVerticaConfigOp := makeNMADownloadConfigOp(
-		"NMADownloadVerticaConfigOp", sourceConfigHost, "config/vertica", &verticaConfContent, vdb)
+		"NMADownloadVerticaConfigOp", sourceConfigHost, "config/vertica", &verticaConfContent, vdb, sandbox)
 	nmaUploadVerticaConfigOp := makeNMAUploadConfigOp(
 		"NMAUploadVerticaConfigOp", sourceConfigHost, targetHosts, "config/vertica", &verticaConfContent, vdb)
 	var spreadConfContent string
 	nmaDownloadSpreadConfigOp := makeNMADownloadConfigOp(
-		"NMADownloadSpreadConfigOp", sourceConfigHost, "config/spread", &spreadConfContent, vdb)
+		"NMADownloadSpreadConfigOp", sourceConfigHost, "config/spread", &spreadConfContent, vdb, sandbox)
 	nmaUploadSpreadConfigOp := makeNMAUploadConfigOp(
 		"NMAUploadSpreadConfigOp", sourceConfigHost, targetHosts, "config/spread", &spreadConfContent, vdb)
 	*instructions = append(*instructions,
@@ -109,10 +109,12 @@ type nodeStateInfo struct {
 	Name             string   `json:"name"`
 	Sandbox          string   `json:"sandbox_name"`
 	Version          string   `json:"build_info"`
+	IsControlNode    bool     `json:"is_control_node"`
+	ControlNode      string   `json:"control_node"`
 }
 
 func (node *nodeStateInfo) asNodeInfo() (n NodeInfo, err error) {
-	n = node.asNodeInfoWoVer()
+	n = node.asNodeInfoWithoutVer()
 	// version can be, eg, v24.0.0-<revision> or v23.4.0-<hotfix|date>-<revision> including a hotfix or daily build date
 	verWithHotfix := 3
 	verWithoutHotfix := 2
@@ -126,8 +128,8 @@ func (node *nodeStateInfo) asNodeInfo() (n NodeInfo, err error) {
 	return
 }
 
-// asNodeInfoWoVer will create a NodeInfo with empty Version and Revision
-func (node *nodeStateInfo) asNodeInfoWoVer() (n NodeInfo) {
+// asNodeInfoWithoutVer will create a NodeInfo with empty Version and Revision
+func (node *nodeStateInfo) asNodeInfoWithoutVer() (n NodeInfo) {
 	n.Address = node.Address
 	n.Name = node.Name
 	n.State = node.State
@@ -153,20 +155,88 @@ func getInitiatorHost(primaryUpNodes, hostsToSkip []string) (string, error) {
 	return initiatorHosts[0], nil
 }
 
-// getVDBFromRunningDB will retrieve db configurations from a non-sandboxed host by calling https endpoints of a running db
-func (vcc VClusterCommands) getVDBFromRunningDB(vdb *VCoordinationDatabase, options *DatabaseOptions) error {
-	return vcc.getVDBFromRunningDBImpl(vdb, options, false, util.MainClusterSandbox)
+// getInitiatorHostInCluster returns an initiator that is the first up node of a subcluster in the main cluster
+// or a sandbox other than the target subcluster
+func getInitiatorHostInCluster(name, sandbox, scname string, vdb *VCoordinationDatabase) ([]string, error) {
+	// up hosts will be :
+	// 1. up hosts from the main subcluster if the sandbox is empty
+	// 2. up hosts from the sandbox if the sandbox is specified
+	var upHost string
+	for _, node := range vdb.HostNodeMap {
+		if node.State == util.NodeDownState {
+			continue
+		}
+		// the up host is used to promote/demote subcluster
+		// should not be a part of this subcluster
+		if node.Sandbox == sandbox && node.Subcluster != scname {
+			upHost = node.Address
+			break
+		}
+	}
+	if upHost == "" {
+		if sandbox == "" {
+			return nil, fmt.Errorf(`[%s] cannot find any up hosts for subcluster %s in main subcluster`, name, scname)
+		}
+		return nil, fmt.Errorf("[%s] cannot find any up hosts for subcluster %s in the sandbox %s", name, scname, sandbox)
+	}
+	// use first up host to execute https post request
+	initiatorHost := []string{upHost}
+	return initiatorHost, nil
 }
 
-// getVDBFromRunningDB will retrieve db configurations from any UP host by calling https endpoints of a running db
+// getInitiatorHostForReplication returns an initiator that is the first up source host in the main cluster
+// or a sandbox
+func getInitiatorHostForReplication(name, sandbox string, hosts []string, vdb *VCoordinationDatabase) ([]string, error) {
+	// the k8s operator uses a service hostname, not an ip address of a node in the cluster
+	// since the hostname will not match any node in the cluster we need to skip the below logic
+	// this is ok since the operator has already chosen an appropriate "initiator"
+	if util.IsK8sEnvironment() {
+		return hosts, nil
+	}
+	// source hosts will be :
+	// 1. up hosts from the main subcluster if the sandbox is empty
+	// 2. up hosts from the sandbox if the sandbox is specified
+	var sourceHosts []string
+	for _, node := range vdb.HostNodeMap {
+		if node.State != util.NodeDownState && node.Sandbox == sandbox {
+			sourceHosts = append(sourceHosts, node.Address)
+		}
+	}
+	sourceHosts = util.SliceCommon(hosts, sourceHosts)
+	if len(sourceHosts) == 0 {
+		if sandbox == "" {
+			return nil, fmt.Errorf("[%s] cannot find any up hosts from source database", name)
+		}
+		return nil, fmt.Errorf("[%s] cannot find any up hosts in the sandbox %s", name, sandbox)
+	}
+
+	initiatorHost := []string{getInitiator(sourceHosts)}
+	return initiatorHost, nil
+}
+
+// getVDBFromRunningDB will retrieve db configurations from a non-sandboxed host by calling https endpoints of a running db
+func (vcc VClusterCommands) getVDBFromRunningDB(vdb *VCoordinationDatabase, options *DatabaseOptions) error {
+	return vcc.getVDBFromRunningDBImpl(vdb, options, false /*allow use http result from sandbox nodes*/, util.MainClusterSandbox,
+		false /*update node state by sending http request to each node*/)
+}
+
+// getVDBFromMainRunningDBContainsSandbox will retrieve db configurations from a non-sandboxed host by calling https endpoints of
+// a running db, and it can return the accurate state of the sandboxed nodes.
+func (vcc VClusterCommands) getVDBFromMainRunningDBContainsSandbox(vdb *VCoordinationDatabase, options *DatabaseOptions) error {
+	return vcc.getVDBFromRunningDBImpl(vdb, options, false /*allow use http result from sandbox nodes*/, util.MainClusterSandbox,
+		true /*update node state by sending http request to each node*/)
+}
+
+// getVDBFromRunningDBIncludeSandbox will retrieve db configurations from a sandboxed host by calling https endpoints of a running db
 func (vcc VClusterCommands) getVDBFromRunningDBIncludeSandbox(vdb *VCoordinationDatabase, options *DatabaseOptions, sandbox string) error {
-	return vcc.getVDBFromRunningDBImpl(vdb, options, true, sandbox)
+	return vcc.getVDBFromRunningDBImpl(vdb, options, true /*allow use http result from sandbox nodes*/, sandbox,
+		false /*update node state by sending http request to each node*/)
 }
 
 // getVDBFromRunningDB will retrieve db configurations by calling https endpoints of a running db
 func (vcc VClusterCommands) getVDBFromRunningDBImpl(vdb *VCoordinationDatabase, options *DatabaseOptions,
-	allowUseSandboxRes bool, sandbox string) error {
-	err := options.setUsePassword(vcc.Log)
+	allowUseSandboxRes bool, sandbox string, updateNodeState bool) error {
+	err := options.setUsePasswordAndValidateUsernameIfNeeded(vcc.Log)
 	if err != nil {
 		return fmt.Errorf("fail to set userPassword while retrieving database configurations, %w", err)
 	}
@@ -174,20 +244,28 @@ func (vcc VClusterCommands) getVDBFromRunningDBImpl(vdb *VCoordinationDatabase, 
 	httpsGetNodesInfoOp, err := makeHTTPSGetNodesInfoOp(options.DBName, options.Hosts,
 		options.usePassword, options.UserName, options.Password, vdb, allowUseSandboxRes, sandbox)
 	if err != nil {
-		return fmt.Errorf("fail to produce httpsGetNodesInfo instructions while retrieving database configurations, %w", err)
+		return fmt.Errorf("fail to produce httpsGetNodesInfo instruction while retrieving database configurations, %w", err)
 	}
 
 	httpsGetClusterInfoOp, err := makeHTTPSGetClusterInfoOp(options.DBName, options.Hosts,
 		options.usePassword, options.UserName, options.Password, vdb)
 	if err != nil {
-		return fmt.Errorf("fail to produce httpsGetClusterInfo instructions while retrieving database configurations, %w", err)
+		return fmt.Errorf("fail to produce httpsGetClusterInfo instruction while retrieving database configurations, %w", err)
 	}
 
 	var instructions []clusterOp
 	instructions = append(instructions, &httpsGetNodesInfoOp, &httpsGetClusterInfoOp)
 
-	certs := httpsCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+	// update node state for sandboxed nodes
+	if allowUseSandboxRes || updateNodeState {
+		httpsUpdateNodeState, e := makeHTTPSUpdateNodeStateOp(vdb, options.usePassword, options.UserName, options.Password)
+		if e != nil {
+			return fmt.Errorf("fail to produce httpsUpdateNodeState instruction while updating node states, %w", e)
+		}
+		instructions = append(instructions, &httpsUpdateNodeState)
+	}
+
+	clusterOpEngine := makeClusterOpEngine(instructions, options)
 	err = clusterOpEngine.run(vcc.Log)
 	if err != nil {
 		return fmt.Errorf("fail to retrieve database configurations, %w", err)
@@ -198,7 +276,7 @@ func (vcc VClusterCommands) getVDBFromRunningDBImpl(vdb *VCoordinationDatabase, 
 
 // getClusterInfoFromRunningDB will retrieve db configurations by calling https endpoints of a running db
 func (vcc VClusterCommands) getClusterInfoFromRunningDB(vdb *VCoordinationDatabase, options *DatabaseOptions) error {
-	err := options.setUsePassword(vcc.Log)
+	err := options.setUsePasswordAndValidateUsernameIfNeeded(vcc.Log)
 	if err != nil {
 		return fmt.Errorf("fail to set userPassword while retrieving cluster configurations, %w", err)
 	}
@@ -212,8 +290,7 @@ func (vcc VClusterCommands) getClusterInfoFromRunningDB(vdb *VCoordinationDataba
 	var instructions []clusterOp
 	instructions = append(instructions, &httpsGetClusterInfoOp)
 
-	certs := httpsCerts{key: options.Key, cert: options.Cert, caCert: options.CaCert}
-	clusterOpEngine := makeClusterOpEngine(instructions, &certs)
+	clusterOpEngine := makeClusterOpEngine(instructions, options)
 	err = clusterOpEngine.run(vcc.Log)
 	if err != nil {
 		return fmt.Errorf("fail to retrieve cluster configurations, %w", err)
@@ -246,6 +323,26 @@ func getInitiator(hosts []string) string {
 	return hosts[0]
 }
 
+// getInitiatorInCluster will pick an initiator from a host list to send requests to
+// such that the host is up and within the specified cluster (either main or sandbox);
+// an empty value of targetSandbox means the host is to be selected from the main cluster
+func getInitiatorInCluster(targetSandbox string, hosts []string,
+	upHostsToSandboxes map[string]string) (initiatorHost string, err error) {
+	for _, host := range hosts {
+		if sandbox, ok := upHostsToSandboxes[host]; ok && sandbox == targetSandbox {
+			initiatorHost = host
+			return
+		}
+	}
+	if targetSandbox == "" {
+		// main cluster
+		err = fmt.Errorf("no hosts among %v are both UP and within the main cluster", hosts)
+	} else {
+		err = fmt.Errorf("no hosts among %v are both UP and within sandbox %v", hosts, targetSandbox)
+	}
+	return
+}
+
 // getInitiator will pick an initiator from the up host list to execute https calls
 // such that the initiator is also among the user provided host list
 func getInitiatorFromUpHosts(upHosts, userProvidedHosts []string) string {
@@ -276,4 +373,130 @@ func validateHostMaps(hosts []string, maps ...map[string]string) error {
 		}
 	}
 	return allErrors
+}
+
+// reIP will do re-IP before sandboxing/unsandboxing if we find the catalog has stale node IPs.
+// reIP will be called in three cases:
+// 1. when sandboxing a subcluster, we will do re-ip in target sandbox since the node IPs in
+// the main cluster could be changed. For example, a pod in main cluster gets restarted in k8s
+// will cause inconsistent IPs between the sandbox and the main cluster. The target sandbox will
+// have a stale node IP so adding that pod to the sandbox will fail.
+// 2. when unsandboxing a subcluster, we will do re-ip in the main cluster since the node IPs
+// in the sandbox could be changed. For example, a pod in a sandbox gets restarted in k8s will
+// cause inconsistent IPs between the sandbox and the main cluster. The main cluster will
+// have a stale node IP so moving that pod back to the main cluster will fail.
+// 3. when removing a subcluster, we will do re-ip in the main cluster since the node IPs in
+// the subcluster could be changed. This is a special case in k8s online upgrade, when a pod in
+// a transient subcluster gets killed, we will not restart the pods in the subcluster. Instead,
+// we will remove the subcluster. At this time, the nodes inside the subcluster have different IPs
+// than the ones in the catalog, so removing subcluster will fail when deleting the catalog directories.
+// We cannot find the correct nodes to do the deletion.
+func (vcc *VClusterCommands) reIP(options *DatabaseOptions, scName, primaryUpHost string,
+	nodeNameAddressMap map[string]string, reloadSpread bool) error {
+	reIPList := []ReIPInfo{}
+	reIPHosts := []string{}
+	vdb := makeVCoordinationDatabase()
+
+	backupHosts := options.Hosts
+	// only use one up node in the sandbox/main-cluster to retrieve nodes' info,
+	// then we can get the latest node IPs in the sandbox/main-cluster.
+	// When the operation is sandbox, the initiator will be a primary up node
+	// from the target sandbox.
+	// When the operation is unsandbox, the initiator will be a primary up node
+	// from the main cluster.
+	// When the operation is remove_subcluster, the initiator will be a primary
+	// up node from the main cluster.
+	initiator := []string{primaryUpHost}
+	options.Hosts = initiator
+	err := vcc.getVDBFromRunningDBIncludeSandbox(&vdb, options, AnySandbox)
+	if err != nil {
+		return fmt.Errorf("host %q in database is not available: %w", primaryUpHost, err)
+	}
+	// restore the options.Hosts for later creating sandbox/unsandbox instructions
+	options.Hosts = backupHosts
+
+	// if the current node IPs doesn't match the expected ones, we need to do re-ip
+	for _, vnode := range vdb.HostNodeMap {
+		address, ok := nodeNameAddressMap[vnode.Name]
+		if ok && address != vnode.Address {
+			reIPList = append(reIPList, ReIPInfo{NodeName: vnode.Name, TargetAddress: address})
+			reIPHosts = append(reIPHosts, address)
+		}
+	}
+	if len(reIPList) > 0 {
+		return vcc.doReIP(options, scName, initiator, reIPHosts, reIPList, reloadSpread)
+	}
+	return nil
+}
+
+// doReIP will call NMA and HTTPs endpoints to fix the IPs in the catalog.
+// It will execute below steps:
+// 1. collect network profile for the nodes that need to re-ip
+// 2. execute re-ip on a primary up host
+// 3. reload spread on a primary up host if needed
+func (vcc *VClusterCommands) doReIP(options *DatabaseOptions, scName string,
+	initiator, reIPHosts []string, reIPList []ReIPInfo, reloadSpread bool) error {
+	var instructions []clusterOp
+	nmaNetworkProfileOp := makeNMANetworkProfileOp(reIPHosts)
+	err := options.setUsePassword(vcc.Log)
+	if err != nil {
+		return err
+	}
+	instructions = append(instructions, &nmaNetworkProfileOp)
+	for _, reIPNode := range reIPList {
+		httpsReIPOp, e := makeHTTPSReIPOpWithHosts(initiator, []string{reIPNode.NodeName},
+			[]string{reIPNode.TargetAddress}, options.usePassword, options.UserName, options.Password)
+		if e != nil {
+			return e
+		}
+		instructions = append(instructions, &httpsReIPOp)
+	}
+	if reloadSpread {
+		httpsReloadSpreadOp, e := makeHTTPSReloadSpreadOpWithInitiator(initiator, options.usePassword, options.UserName, options.Password)
+		if e != nil {
+			return err
+		}
+		instructions = append(instructions, &httpsReloadSpreadOp)
+	}
+	clusterOpEngine := makeClusterOpEngine(instructions, options)
+	err = clusterOpEngine.run(vcc.Log)
+	if err != nil {
+		return fmt.Errorf("failed to re-ip nodes of subcluster %q: %w", scName, err)
+	}
+
+	return nil
+}
+
+func (vcc *VClusterCommands) getUnreachableHosts(options *DatabaseOptions, hosts []string) ([]string, error) {
+	var nmaHealthInstructions []clusterOp
+	nmaHealthOp := makeNMAHealthOpSkipUnreachable(hosts)
+	nmaHealthInstructions = []clusterOp{&nmaHealthOp}
+	opEng := makeClusterOpEngine(nmaHealthInstructions, options)
+	err := opEng.run(vcc.Log)
+	if err != nil {
+		return nil, err
+	}
+	return opEng.execContext.unreachableHosts, nil
+}
+
+// An nmaGenericJSONResponse is the default response that is generated,
+// the response value is of type "string" in JSON format.
+type nmaGenericJSONResponse struct {
+	RespStr string
+}
+
+// extractCatalogPrefix extracts the catalog prefix from a node's catalog path.
+// This function takes the full catalog path, database name, and node name as
+// input parameters, and returns the catalog prefix along with a boolean indicating
+// whether the extraction was successful.
+func extractCatalogPrefix(catalogPath, dbName, nodeName string) (string, bool) {
+	catalogSuffix := "/" + dbName + "/" + nodeName + "_catalog/Catalog"
+	// if catalog suffix matches catalog path, it means we created the catalog in the root path
+	if catalogPath == catalogSuffix {
+		return "/", true
+	}
+	if !strings.HasSuffix(catalogPath, catalogSuffix) {
+		return "", false
+	}
+	return strings.TrimSuffix(catalogPath, catalogSuffix), true
 }

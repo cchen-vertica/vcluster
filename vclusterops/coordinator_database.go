@@ -36,6 +36,7 @@ type VCoordinationDatabase struct {
 	CatalogPrefix string
 	DataPrefix    string
 	HostNodeMap   vHostNodeMap
+	UnboundNodes  []*VCoordinationNode
 	// for convenience
 	HostList []string // expected to be resolved IP addresses
 
@@ -55,7 +56,9 @@ type VCoordinationDatabase struct {
 	// more to add when useful
 	Ipv6 bool
 
-	PrimaryUpNodes []string
+	PrimaryUpNodes        []string
+	ComputeNodes          []string
+	FirstStartAfterRevive bool
 }
 
 type vHostNodeMap map[string]*VCoordinationNode
@@ -121,6 +124,7 @@ func (vdb *VCoordinationDatabase) setFromCreateDBOptions(options *VCreateDatabas
 	vdb.HostList = make([]string, len(options.Hosts))
 	vdb.HostList = options.Hosts
 	vdb.LicensePathOnNode = options.LicensePathOnNode
+	vdb.Ipv6 = options.IPv6
 
 	if options.GetAwsCredentialsFromEnv {
 		err := vdb.getAwsCredentialsFromEnv()
@@ -136,6 +140,13 @@ func (vdb *VCoordinationDatabase) setFromCreateDBOptions(options *VCreateDatabas
 // addNode adds a given host to the VDB's HostList and HostNodeMap.
 // Duplicate host will not be added.
 func (vdb *VCoordinationDatabase) addNode(vnode *VCoordinationNode) error {
+	// unbound nodes have the same 0.0.0.0 address,
+	// so we add them into the UnboundedNodes list
+	if vnode.Address == util.UnboundedIPv4 || vnode.Address == util.UnboundedIPv6 {
+		vdb.UnboundNodes = append(vdb.UnboundNodes, vnode)
+		return nil
+	}
+
 	if _, exist := vdb.HostNodeMap[vnode.Address]; exist {
 		return fmt.Errorf("host %s has already been in the VDB's HostList", vnode.Address)
 	}
@@ -147,10 +158,12 @@ func (vdb *VCoordinationDatabase) addNode(vnode *VCoordinationNode) error {
 }
 
 // addHosts adds a given list of hosts to the VDB's HostList
-// and HostNodeMap.
-func (vdb *VCoordinationDatabase) addHosts(hosts []string, scName string) error {
-	totalHostCount := len(hosts) + len(vdb.HostList)
-	nodeNameToHost := vdb.genNodeNameToHostMap()
+// and HostNodeMap. existingHostNodeMap contains entries for nodes
+// in all clusters (main and sandboxes)
+func (vdb *VCoordinationDatabase) addHosts(hosts []string, scName string,
+	existingHostNodeMap vHostNodeMap) error {
+	totalHostCount := len(hosts) + len(existingHostNodeMap)
+	nodeNameToHost := genNodeNameToHostMap(existingHostNodeMap)
 	for _, host := range hosts {
 		vNode := makeVCoordinationNode()
 		name, ok := util.GenVNodeName(nodeNameToHost, vdb.Name, totalHostCount)
@@ -187,6 +200,7 @@ func (vdb *VCoordinationDatabase) copy(targetHosts []string) VCoordinationDataba
 		LicensePathOnNode:       vdb.LicensePathOnNode,
 		Ipv6:                    vdb.Ipv6,
 		PrimaryUpNodes:          util.CopySlice(vdb.PrimaryUpNodes),
+		ComputeNodes:            util.CopySlice(vdb.ComputeNodes),
 	}
 
 	if len(targetHosts) == 0 {
@@ -212,10 +226,10 @@ func (vdb *VCoordinationDatabase) copyHostNodeMap(targetHosts []string) vHostNod
 }
 
 // genNodeNameToHostMap generates a map, with node name as key and
-// host ip as value, from HostNodeMap.
-func (vdb *VCoordinationDatabase) genNodeNameToHostMap() map[string]string {
+// host ip as value, from HostNodeMap which includes entries for nodes in all clusters.
+func genNodeNameToHostMap(existingHostNodeMap vHostNodeMap) map[string]string {
 	vnodes := make(map[string]string)
-	for h, vnode := range vdb.HostNodeMap {
+	for h, vnode := range existingHostNodeMap {
 		vnodes[vnode.Name] = h
 	}
 	return vnodes
@@ -266,20 +280,20 @@ func (vdb *VCoordinationDatabase) hasAtLeastOneDownNode() bool {
 	return false
 }
 
-// genDataPath builds and returns the data path
-func (vdb *VCoordinationDatabase) genDataPath(nodeName string) string {
+// GenDataPath builds and returns the data path
+func (vdb *VCoordinationDatabase) GenDataPath(nodeName string) string {
 	dataSuffix := fmt.Sprintf("%s_data", nodeName)
 	return filepath.Join(vdb.DataPrefix, vdb.Name, dataSuffix)
 }
 
-// genDepotPath builds and returns the depot path
-func (vdb *VCoordinationDatabase) genDepotPath(nodeName string) string {
+// GenDepotPath builds and returns the depot path
+func (vdb *VCoordinationDatabase) GenDepotPath(nodeName string) string {
 	depotSuffix := fmt.Sprintf("%s_depot", nodeName)
 	return filepath.Join(vdb.DepotPrefix, vdb.Name, depotSuffix)
 }
 
-// genCatalogPath builds and returns the catalog path
-func (vdb *VCoordinationDatabase) genCatalogPath(nodeName string) string {
+// GenCatalogPath builds and returns the catalog path
+func (vdb *VCoordinationDatabase) GenCatalogPath(nodeName string) string {
 	catalogSuffix := fmt.Sprintf("%s_catalog", nodeName)
 	return filepath.Join(vdb.CatalogPrefix, vdb.Name, catalogSuffix)
 }
@@ -313,6 +327,35 @@ func (vdb *VCoordinationDatabase) filterPrimaryNodes() {
 	vdb.HostList = maps.Keys(vdb.HostNodeMap)
 }
 
+// Update and limit the hostlist based on status and sandbox info
+// If sandbox provided, pick up sandbox up hosts and return. Else return up hosts.
+func (vdb *VCoordinationDatabase) filterUpHostlist(inputHosts []string, sandbox string) []string {
+	var clusterHosts []string
+	var upSandboxHosts []string
+
+	for _, h := range inputHosts {
+		vnode, ok := vdb.HostNodeMap[h]
+		if !ok {
+			// host address not found in vdb, skip it
+			continue
+		}
+		if vnode.Sandbox == "" && vnode.State == util.NodeUpState {
+			clusterHosts = append(clusterHosts, vnode.Address)
+		} else if vnode.Sandbox == sandbox && vnode.State == util.NodeUpState {
+			upSandboxHosts = append(upSandboxHosts, vnode.Address)
+		}
+	}
+	if sandbox == "" {
+		return clusterHosts
+	}
+	return upSandboxHosts
+}
+
+// hostIsUp returns true if the host is up
+func (vdb *VCoordinationDatabase) hostIsUp(hostName string) bool {
+	return vdb.HostNodeMap[hostName].State == util.NodeUpState
+}
+
 // VCoordinationNode represents node information from the database catalog.
 type VCoordinationNode struct {
 	Name    string `json:"name"`
@@ -331,8 +374,10 @@ type VCoordinationNode struct {
 	// empty string if it is not an eon db
 	Subcluster string
 	// empty string if it is not in a sandbox
-	Sandbox string
-	Version string
+	Sandbox       string
+	Version       string
+	IsControlNode bool
+	ControlNode   string
 }
 
 func makeVCoordinationNode() VCoordinationNode {
@@ -381,11 +426,11 @@ func (vnode *VCoordinationNode) setNode(vdb *VCoordinationDatabase, address, nam
 	vnode.Address = address
 	vnode.Name = name
 	vnode.Subcluster = scName
-	vnode.CatalogPath = vdb.genCatalogPath(vnode.Name)
-	dataPath := vdb.genDataPath(vnode.Name)
+	vnode.CatalogPath = vdb.GenCatalogPath(vnode.Name)
+	dataPath := vdb.GenDataPath(vnode.Name)
 	vnode.StorageLocations = append(vnode.StorageLocations, dataPath)
 	if vdb.DepotPrefix != "" {
-		vnode.DepotPath = vdb.genDepotPath(vnode.Name)
+		vnode.DepotPath = vdb.GenDepotPath(vnode.Name)
 	}
 	if vdb.Ipv6 {
 		vnode.ControlAddressFamily = util.IPv6ControlAddressFamily
