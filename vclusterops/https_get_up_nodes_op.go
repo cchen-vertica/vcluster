@@ -138,6 +138,7 @@ func (op *httpsGetUpNodesOp) execute(execContext *opEngineExecContext) error {
 func (op *httpsGetUpNodesOp) processResult(execContext *opEngineExecContext) error {
 	var allErrs error
 	upHosts := mapset.NewSet[string]()
+	computeHosts := mapset.NewSet[string]()
 	upScInfo := make(map[string]string)
 	exceptionHosts := []string{}
 	downHosts := []string{}
@@ -148,8 +149,9 @@ func (op *httpsGetUpNodesOp) processResult(execContext *opEngineExecContext) err
 		op.logResponse(host, result)
 		if !result.isPassing() {
 			allErrs = errors.Join(allErrs, result.err)
-			if result.isUnauthorizedRequest() || result.isInternalError() {
-				// Authentication error and any unexpected internal server error
+			if result.isUnauthorizedRequest() || result.isInternalError() || result.hasPreconditionFailed() {
+				// Authentication error and any unexpected internal server error, plus compute nodes or nodes
+				// that haven't joined the cluster yet
 				exceptionHosts = append(exceptionHosts, host)
 				continue
 			}
@@ -167,16 +169,15 @@ func (op *httpsGetUpNodesOp) processResult(execContext *opEngineExecContext) err
 			continue
 		}
 
-		if op.cmdType == StopDBCmd || op.cmdType == StopSubclusterCmd {
-			err = op.validateHosts(nodesStates)
-			if err != nil {
-				allErrs = errors.Join(allErrs, err)
-				break
-			}
+		// For certain commands, check hosts in input against those reported from endpoint
+		err = op.validateHosts(nodesStates)
+		if err != nil {
+			allErrs = errors.Join(allErrs, err)
+			break
 		}
 
 		// Collect all the up hosts
-		err = op.collectUpHosts(nodesStates, host, upHosts, upScInfo, sandboxInfo, upScNodes, scNodes)
+		err = op.collectUpHosts(nodesStates, host, upHosts, computeHosts, upScInfo, sandboxInfo, upScNodes, scNodes)
 		if err != nil {
 			allErrs = errors.Join(allErrs, err)
 			return allErrs
@@ -190,6 +191,7 @@ func (op *httpsGetUpNodesOp) processResult(execContext *opEngineExecContext) err
 			break
 		}
 	}
+	execContext.computeHosts = computeHosts.ToSlice()
 	execContext.nodesInfo = upScNodes.ToSlice()
 	execContext.scNodesInfo = scNodes.ToSlice()
 	execContext.upHostsToSandboxes = sandboxInfo
@@ -210,7 +212,10 @@ func isCompleteScanRequired(cmdType CmdType) bool {
 		cmdType == ManageConnectionDrainingCmd ||
 		cmdType == SetConfigurationParameterCmd ||
 		cmdType == GetConfigurationParameterCmd ||
-		cmdType == GetDrainingStatusCmd
+		cmdType == GetDrainingStatusCmd ||
+		// need to find an up node from the sandbox if we're starting sandbox
+		// nodes, to handle identifying compute nodes in the sandbox
+		cmdType == StartNodeCmd
 }
 
 func (op *httpsGetUpNodesOp) finalize(_ *opEngineExecContext) error {
@@ -272,6 +277,10 @@ func (op *httpsGetUpNodesOp) processHostLists(upHosts mapset.Set[string], upScIn
 
 // validateHosts can validate if hosts in user input matches the ones in GET /nodes response
 func (op *httpsGetUpNodesOp) validateHosts(nodesStates nodesStateInfo) error {
+	// only needed for the following commands
+	if !(op.cmdType == StopDBCmd || op.cmdType == StopSubclusterCmd) {
+		return nil
+	}
 	var dbHosts []string
 	dbUnexpected := false
 	unexpectedDBName := ""
@@ -307,7 +316,7 @@ func (op *httpsGetUpNodesOp) checkUpHostEligible(node *nodeStateInfo) bool {
 	return true
 }
 
-func (op *httpsGetUpNodesOp) collectUpHosts(nodesStates nodesStateInfo, host string, upHosts mapset.Set[string],
+func (op *httpsGetUpNodesOp) collectUpHosts(nodesStates nodesStateInfo, host string, upHosts, computeHosts mapset.Set[string],
 	upScInfo, sandboxInfo map[string]string, upScNodes, scNodes mapset.Set[NodeInfo]) (err error) {
 	foundSC := false
 	for _, node := range nodesStates.NodeList {
@@ -328,6 +337,10 @@ func (op *httpsGetUpNodesOp) collectUpHosts(nodesStates nodesStateInfo, host str
 			if op.requiresSandboxInfo() {
 				sandboxInfo[node.Address] = node.Sandbox
 			}
+		}
+
+		if node.State == util.NodeComputeState {
+			computeHosts.Add(node.Address)
 		}
 
 		if op.scName == node.Subcluster {
@@ -379,12 +392,15 @@ func (op *httpsGetUpNodesOp) collectUnsandboxingHosts(nodesStates nodesStateInfo
 	mainNodeFound := false
 	sandboxNodeFound := false
 	for _, node := range nodesStates.NodeList {
-		if node.State == util.NodeUpState {
+		// We can only send unsandbox commands from nodes that are in the UP or UNKNOWN state (in a sandbox)
+		// If the node is in any other states, it cannot unsandbox or cannot receive https requests
+		if node.State == util.NodeUpState || node.State == util.NodeUnknownState {
 			// A sandbox could consist of multiple subclusters.
 			// We need to run unsandbox command on the other subcluster node in the same sandbox
 			// Find a node from same sandbox but different subcluster, if exists
 			if node.Sandbox == op.sandbox && node.Subcluster != op.scName {
 				sandboxInfo[node.Address] = node.Sandbox
+				sandboxNodeFound = true
 			}
 			// Get one main cluster host
 			if node.Sandbox == "" && !mainNodeFound {

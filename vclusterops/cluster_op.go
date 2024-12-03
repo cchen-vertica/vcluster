@@ -206,6 +206,7 @@ type clusterOp interface {
 	applyTLSOptions(tlsOptions opTLSOptions) error
 	isSkipExecute() bool
 	filterUnreachableHosts(execContext *opEngineExecContext)
+	filterHostsBySandbox(execContext *opEngineExecContext)
 }
 
 /* Cluster ops basic fields and functions
@@ -443,11 +444,11 @@ func (op *opBase) isSkipExecute() bool {
 // hasQuorum checks if we have enough working primary nodes to maintain data integrity
 // quorumCount = (1/2 * number of primary nodes) + 1
 func (op *opBase) hasQuorum(hostCount, primaryNodeCount uint) bool {
-	quorumCount := (primaryNodeCount + 1) / 2
+	quorumCount := primaryNodeCount/2 + 1
 	if hostCount < quorumCount {
 		op.logger.PrintError("[%s] Quorum check failed: "+
 			"number of hosts with latest catalog (%d) is not "+
-			"greater than or equal to 1/2 of number of the primary nodes (%d)\n",
+			"greater than 1/2 of number of the primary nodes (%d)\n",
 			op.name, hostCount, primaryNodeCount)
 		return false
 	}
@@ -473,6 +474,29 @@ func (op *opBase) filterUnreachableHosts(execContext *opEngineExecContext) {
 	}
 
 	op.hosts = util.SliceDiff(op.hosts, execContext.unreachableHosts)
+}
+
+// filterHostsBySandbox selects hosts only in the target sandbox or main cluster
+func (op *opBase) filterHostsBySandbox(execContext *opEngineExecContext) {
+	if execContext.sandbox == util.MainClusterSandbox {
+		return
+	}
+
+	// If vdb is given as nil or the vdb is obtained,
+	// we will not filter hosts by sandbox.
+	// Instead, we will send requests to all hosts.
+	if execContext.vdbForSandboxInfo == nil {
+		return
+	}
+
+	// filter out hosts that are not in the target sandbox or main cluster
+	var hostsNotInSandbox []string
+	for h, vnode := range execContext.vdbForSandboxInfo.HostNodeMap {
+		if vnode.Sandbox != execContext.sandbox {
+			hostsNotInSandbox = append(hostsNotInSandbox, h)
+		}
+	}
+	op.hosts = util.SliceDiff(op.hosts, hostsNotInSandbox)
 }
 
 /* Sensitive fields in request body
