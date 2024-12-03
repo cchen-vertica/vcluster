@@ -347,13 +347,13 @@ func (vdb *VCoordinationDatabase) filterUpHostlist(inputHosts []string, sandbox 
 			// host address not found in vdb, skip it
 			continue
 		}
-		if vnode.Sandbox == "" && vnode.State == util.NodeUpState {
+		if vnode.Sandbox == util.MainClusterSandbox && vnode.State == util.NodeUpState {
 			clusterHosts = append(clusterHosts, vnode.Address)
 		} else if vnode.Sandbox == sandbox && vnode.State == util.NodeUpState {
 			upSandboxHosts = append(upSandboxHosts, vnode.Address)
 		}
 	}
-	if sandbox == "" {
+	if sandbox == util.MainClusterSandbox {
 		return clusterHosts
 	}
 	return upSandboxHosts
@@ -386,6 +386,29 @@ type VCoordinationNode struct {
 	Version       string
 	IsControlNode bool
 	ControlNode   string
+}
+
+func CloneVCoordinationNode(node *VCoordinationNode) *VCoordinationNode {
+	if node == nil {
+		return nil
+	}
+	return &VCoordinationNode{
+		Name:                 node.Name,
+		Address:              node.Address,
+		CatalogPath:          node.CatalogPath,
+		StorageLocations:     append([]string{}, node.StorageLocations...),     // Create a new slice
+		UserStorageLocations: append([]string{}, node.UserStorageLocations...), // Create a new slice
+		DepotPath:            node.DepotPath,
+		Port:                 node.Port,
+		ControlAddressFamily: node.ControlAddressFamily,
+		IsPrimary:            node.IsPrimary,
+		State:                node.State,
+		Subcluster:           node.Subcluster,
+		Sandbox:              node.Sandbox,
+		Version:              node.Version,
+		IsControlNode:        node.IsControlNode,
+		ControlNode:          node.ControlNode,
+	}
 }
 
 func makeVCoordinationNode() VCoordinationNode {
